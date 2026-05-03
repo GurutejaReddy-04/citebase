@@ -1,0 +1,29 @@
+# Core RAG stack
+langchain==0.2.16
+langchain-community==0.2.16
+langchain-text-splitters==0.2.4
+
+# PDF extraction
+PyMuPDF==1.24.9
+
+# Embeddings (runs locally, no API key needed)
+sentence-transformers==3.0.1
+
+# Vector store
+chromadb==0.5.5
+
+# LLM — modern unified SDK
+google-genai>=1.0.0
+
+# API
+fastapi==0.112.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+pydantic==2.8.2
+
+# Frontend
+streamlit==1.37.1
+requests==2.32.3
+
+# Config
+python-dotenv==1.0.1

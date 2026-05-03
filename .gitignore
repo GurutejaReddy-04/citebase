@@ -1,0 +1,34 @@
+# environment — never commit API keys
+.env
+
+# virtual environment
+.venv/
+venv/
+env/
+
+# chromadb stores embeddings on disk — large and regeneratable
+chroma_db/
+
+# uploaded PDFs — user data, not part of the codebase
+data/
+
+# python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# package build artifacts
+*.egg-info/
+dist/
+build/
+
+# editor folders
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
