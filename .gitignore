@@ -1,0 +1,72 @@
+# environment — never commit API keys
+.env
+.env.*
+!.env.example
+
+# internal planning & developer notes
+PLAN.md
+
+# virtual environment
+.venv/
+venv/
+env/
+
+# chromadb stores embeddings on disk — large and regeneratable
+chroma_db/
+
+# uploaded PDFs — user data, not part of the codebase
+data/
+
+# python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# package build artifacts
+*.egg-info/
+dist/
+build/
+
+# editor folders
+.vscode/
+.idea/
+*.iml
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
+
+# Testing & Coverage reports
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage/
+
+# Database local files
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# Project scratch, data & uploads
+scratch/
+uploaded_docs/
+node_modules/
+backend/chroma_db/
+backend/data/
+
+# Chroma & BM25 binary cache files
+*.pkl
+*.pickle
+
+# Temporary & report files
+*.tmp
+*.temp
+reports/
+tmp_test_chroma/
