@@ -1,3 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 # Core RAG stack
 langchain==0.2.16
 langchain-community==0.2.16
@@ -6,24 +8,37 @@ langchain-text-splitters==0.2.4
 # PDF extraction
 PyMuPDF==1.24.9
 
-# Embeddings (runs locally, no API key needed)
+# Torch & Embeddings (CPU-only build, no CUDA bloat)
+torch==2.14.0
 sentence-transformers==3.0.1
 
-# Vector store
+# Vector store & Sparse retrieval
 chromadb==0.5.5
+rank-bm25==0.2.2
+
+# Web Search Fallback
+ddgs==9.16.0
 
 # LLM — modern unified SDK
-google-genai>=1.0.0
+google-genai==1.46.0
 
 # API
 fastapi==0.112.0
 uvicorn[standard]==0.30.6
 python-multipart==0.0.9
 pydantic==2.8.2
+werkzeug==3.1.8
 
-# Frontend
-streamlit==1.37.1
+# HTTP & Web requests
 requests==2.32.3
+
+# Database & Multi-Tenancy
+sqlalchemy==2.0.52
+psycopg2-binary==2.9.12
+
+# Caching & Rate Limiting
+redis==8.1.0
+fakeredis==2.37.1
 
 # Config
 python-dotenv==1.0.1

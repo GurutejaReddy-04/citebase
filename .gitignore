@@ -1,5 +1,10 @@
 # environment — never commit API keys
 .env
+.env.*
+!.env.example
+
+# internal planning & developer notes
+PLAN.md
 
 # virtual environment
 .venv/
@@ -25,6 +30,7 @@ build/
 # editor folders
 .vscode/
 .idea/
+*.iml
 
 # OS junk
 .DS_Store
@@ -32,3 +38,26 @@ Thumbs.db
 
 # logs
 *.log
+
+# Testing & Coverage reports
+.pytest_cache/
+.coverage
+htmlcov/
+coverage/
+
+# Database local files
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# Project scratch, data & uploads
+scratch/
+uploaded_docs/
+node_modules/
+backend/chroma_db/
+backend/data/
+
+# Chroma & BM25 binary cache files
+*.pkl

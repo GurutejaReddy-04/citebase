@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CiteBase – Document Q&A</title>
+  <link rel="stylesheet" href="styles.css?v=2">
+</head>
+<body>
+  <header>
+    <h1>CiteBase</h1>
+    <p class="subtitle">Document-grounded Q&A with page-level citations.</p>
+  </header>
+  <div class="auth-panel">
+    <div class="auth-form">
+      <label for="apiKeyInput">API Key:</label>
+      <input type="password" id="apiKeyInput" placeholder="Enter X-API-Key (e.g. sk_live_dev_test_key_master_12345)" autocomplete="off">
+      <button id="toggleKeyVisibilityBtn" class="secondary btn-icon" type="button" title="Show/Hide Key">👁️</button>
+      <button id="connectBtn" type="button">Connect / Refresh</button>
+    </div>
+    <div class="tenant-indicator">
+      <span>Tenant:</span>
+      <span id="tenantBadge" class="tenant-pill disconnected">Not Connected</span>
+    </div>
+  </div>
+
+  <div class="layout">
+    <!-- Sidebar: Upload & Collection Management -->
+    <aside class="panel" id="sidebar">
+      <section>
+        <h2>Upload PDF</h2>
+        <label for="fileInput">Choose PDF file</label>
+        <input type="file" id="fileInput" accept=".pdf">
+        <label for="collNameInput">Collection name</label>
+        <input type="text" id="collNameInput" placeholder="e.g. transformer-paper" autocomplete="off">
+        <label for="docTitleInput">Document Title (Optional)</label>
+        <input type="text" id="docTitleInput" placeholder="e.g. Attention Is All You Need" autocomplete="off">
+        <label for="categoryInput">Category (Optional)</label>
+        <input type="text" id="categoryInput" placeholder="e.g. engineering, finance, research" autocomplete="off">
+        <label class="checkbox-label">
+          <input type="checkbox" id="forceCheckbox"> Force re-ingestion (replace existing chunks)
+        </label>
+        <button id="uploadBtn">Upload & Ingest</button>
+        <div id="uploadFeedback" class="feedback"></div>
+      </section>
+
+      <hr>
+
+      <section>
+        <h2>Manage Collections</h2>
+        <label for="collectionSelect">Available collections</label>
+        <select id="collectionSelect">
+          <option value="">-- connect API key to load --</option>
+        </select>
+        <button id="deleteBtn" class="danger">Delete Selected</button>
+        <button id="resetBtn" class="danger">Wipe All Collections</button>
+        <div id="resetConfirm" class="reset-actions hidden">
+          <p class="reset-warning">This removes every collection for this tenant. Confirm?</p>
+          <button id="confirmResetBtn">Yes, Wipe All</button>
+          <button id="cancelResetBtn" class="secondary">Cancel</button>
+        </div>
+        <div id="manageFeedback" class="feedback"></div>
+      </section>
+    </aside>
+
+    <!-- Main: Question & Results -->
+    <main class="panel" id="queryPanel">
+      <div class="query-filters-grid">
+        <div>
+          <label for="queryCollectionSelect">Target Collections</label>
+          <select id="queryCollectionSelect" multiple size="3"></select>
+        </div>
+        <div>
+          <label for="queryCategoryFilter">Filter by Category (Optional)</label>
+          <input type="text" id="queryCategoryFilter" placeholder="e.g. telecom, curriculum">
+          <label class="checkbox-label checkbox-label--spaced">
+            <input type="checkbox" id="rerankToggle" checked> ⚡ Cross-Encoder Reranking
+          </label>
+          <label class="checkbox-label checkbox-label--tight">
+            <input type="checkbox" id="webFallbackToggle" checked> 🌐 Web Search Fallback (DDG/Tavily)
+          </label>
+        </div>
+      </div>
+      <label for="questionInput">Your question</label>
+      <textarea id="questionInput" rows="3" placeholder="What are the key conclusions?"></textarea>
+      <button id="askBtn">Get Answer</button>
+      <div id="queryFeedback" class="feedback"></div>
+
+      <div id="resultsContainer" class="hidden">
+        <div class="results-header">
+          <h3>Answer</h3>
+          <div class="results-meta-group">
+            <span id="retrievalModeBadge" class="mode-badge local_document">📄 Local Document</span>
+            <span id="cachePill" class="cache-pill hidden">⚡ Cached Hit</span>
+          </div>
+        </div>
+        <div id="answerDisplay" class="answer-box"></div>
+        <h3>Sources & Citations</h3>
+        <div id="sourcesDisplay"></div>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js?v=2"></script>
+</body>
+</html>

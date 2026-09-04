@@ -1,0 +1,227 @@
+[
+  {
+    "id": "q01",
+    "question": "What are the prerequisites and syllabus topics for Differential Calculus MA101?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_course_syllabus",
+    "ground_truth_pages": [12, 44],
+    "ground_truth_keywords": ["Differential Calculus", "MA101", "functions of single"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q02",
+    "question": "What is covered in the Nutrition and First Aid Injury Management curriculum?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_sports_nutrition",
+    "ground_truth_pages": [24],
+    "ground_truth_keywords": ["Nutrition", "First Aid", "Injury Management", "Balanced Diet"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q03",
+    "question": "How is steady state analysis of circuits for sinusoidal excitation computed in network theory?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_circuit_theory",
+    "ground_truth_pages": [33],
+    "ground_truth_keywords": ["STEADY STATE ANALYSIS", "SINUSOIDAL EXCITATION", "circuits"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q04",
+    "question": "What are the guidelines to develop behaviour Verilog models for digital circuits?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_digital_vlsi",
+    "ground_truth_pages": [42, 43, 44],
+    "ground_truth_keywords": ["Verilog", "behaviour", "digital"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q05",
+    "question": "How do students determine and plot the frequency response of LSI systems in laboratory experiments?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_signals_lab",
+    "ground_truth_pages": [55, 56],
+    "ground_truth_keywords": ["frequency response", "LSI systems", "plot"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q06",
+    "question": "What optimization methods from Stephen Boyd Convex Optimization are covered in the syllabus?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_optimization_theory",
+    "ground_truth_pages": [78],
+    "ground_truth_keywords": ["Stephen Boyd", "Convex optimization", "Vandenberghe"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q07",
+    "question": "What experiments are performed with Vector Network Analyzer VNA demonstration and optical fiber loss?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_microwave_optics_lab",
+    "ground_truth_pages": [89],
+    "ground_truth_keywords": ["Vector Network Analyzer", "optical fibers", "loss characteristics"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q08",
+    "question": "What topics in Machine Learning An Algorithmic Perspective by Stephen Marsland are taught?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_machine_learning",
+    "ground_truth_pages": [102],
+    "ground_truth_keywords": ["Machine Learning", "Stephen Marsland", "probability distributions"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q09",
+    "question": "How is noise in AM Receiver using Envelope detection analyzed?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_analog_comm",
+    "ground_truth_pages": [118, 137],
+    "ground_truth_keywords": ["Noise", "AM Receiver", "Envelope detection"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q10",
+    "question": "What are the methods of Bioremediation of contaminated sites in environmental engineering?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_environmental_studies",
+    "ground_truth_pages": [128, 129],
+    "ground_truth_keywords": ["Bioremediation", "contaminated sites"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q11",
+    "question": "What optical properties like reflection, refraction, and absorption from Callister Materials Science are covered?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_materials_science",
+    "ground_truth_pages": [144],
+    "ground_truth_keywords": ["Optical properties", "Reflection", "Refraction", "Absorption", "Callister"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q12",
+    "question": "What biomass conversion and renewable energy topics from Klass are in the syllabus?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_renewable_energy",
+    "ground_truth_pages": [160],
+    "ground_truth_keywords": ["Biomass", "Klass", "renewable"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q13",
+    "question": "What ceramic processing principles from James S Reed are taught in materials science?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_ceramics_processing",
+    "ground_truth_pages": [175, 176],
+    "ground_truth_keywords": ["James S. Reed", "Principles of Ceramics Processing"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q14",
+    "question": "How are applications of science and technology used for Disaster Management and Geo-informatics?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_disaster_management",
+    "ground_truth_pages": [187, 188, 189],
+    "ground_truth_keywords": ["Disaster Management", "Geo-informatics", "Applications of Science"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q15",
+    "question": "What is the cluster size N and co-channel reuse ratio formula in cellular networks?",
+    "collection_names": ["telecom_architecture_coll"],
+    "query_type": "fresh_telecom_cluster",
+    "ground_truth_pages": [1],
+    "ground_truth_keywords": ["cluster of N cells", "reuse ratio", "co-channel"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q16",
+    "question": "How do microcell splitting and handoff hysteresis prevent ping-pong effects?",
+    "collection_names": ["telecom_architecture_coll"],
+    "query_type": "fresh_telecom_handoff",
+    "ground_truth_pages": [2],
+    "ground_truth_keywords": ["microcell", "cell splitting", "hysteresis", "handoff"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q17",
+    "question": "What are the uplink and downlink frequency allocations for GEO and LEO satellites in EC412?",
+    "collection_names": ["ece_curriculum_coll"],
+    "query_type": "fresh_satellite_guide",
+    "ground_truth_pages": [1],
+    "ground_truth_keywords": ["EC412", "uplink", "downlink", "GEO", "LEO"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q18",
+    "question": "What are the maximum unambiguous range and Doppler frequency shift equations in EC413?",
+    "collection_names": ["ece_curriculum_coll"],
+    "query_type": "fresh_radar_guide",
+    "ground_truth_pages": [2],
+    "ground_truth_keywords": ["EC413", "unambiguous range", "Doppler"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q19",
+    "question": "Compare cellular co-channel interference ratio D/R with satellite path loss link budget equations.",
+    "collection_names": ["telecom_architecture_coll", "ece_curriculum_coll"],
+    "query_type": "fresh_cross_collection",
+    "ground_truth_pages": [1],
+    "ground_truth_keywords": ["co-channel", "link budget", "path loss"],
+    "expected_retrieval_mode": "local_document"
+  },
+  {
+    "id": "q20",
+    "question": "What are quantum tunneling and bandgap characteristics in nanoscale heterojunctions?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_middle_band",
+    "ground_truth_pages": [16, 157],
+    "ground_truth_keywords": ["quantum", "bandgap", "tunneling"],
+    "expected_retrieval_mode": "blended"
+  },
+  {
+    "id": "q21",
+    "question": "What are the new language features and pattern matching syntax in Rust 2024 edition?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_out_of_domain_web",
+    "ground_truth_pages": [],
+    "ground_truth_keywords": ["Rust 2024", "pattern matching", "edition"],
+    "expected_retrieval_mode": "web_fallback"
+  },
+  {
+    "id": "q22",
+    "question": "How does PostgreSQL multi-version concurrency control MVCC vacuuming work?",
+    "collection_names": ["telecom_architecture_coll"],
+    "query_type": "fresh_out_of_domain_web",
+    "ground_truth_pages": [],
+    "ground_truth_keywords": ["PostgreSQL", "MVCC", "vacuum"],
+    "expected_retrieval_mode": "web_fallback"
+  },
+  {
+    "id": "q23",
+    "question": "What are the consensus mechanisms in Raft distributed state machine replication?",
+    "collection_names": ["ece_curriculum_coll"],
+    "query_type": "fresh_out_of_domain_web",
+    "ground_truth_pages": [],
+    "ground_truth_keywords": ["Raft", "consensus", "state machine"],
+    "expected_retrieval_mode": "web_fallback"
+  },
+  {
+    "id": "q24",
+    "question": "How does Apache Kafka partition rebalancing and consumer group leader election work?",
+    "collection_names": ["test_hybrid_coll"],
+    "query_type": "fresh_out_of_domain_web",
+    "ground_truth_pages": [],
+    "ground_truth_keywords": ["Kafka", "partition", "consumer group"],
+    "expected_retrieval_mode": "web_fallback"
+  },
+  {
+    "id": "q25",
+    "question": "What are the architecture differences between Linux eBPF kernel tracing and user space probes?",
+    "collection_names": ["telecom_architecture_coll"],
+    "query_type": "fresh_out_of_domain_web",
+    "ground_truth_pages": [],
+    "ground_truth_keywords": ["eBPF", "probes", "kernel"],
+    "expected_retrieval_mode": "web_fallback"
+  }
+]

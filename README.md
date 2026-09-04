@@ -1,169 +1,234 @@
-# RAG Document Intelligence
+# CiteBase — Document-Grounded Q&A with Page-Level Citations
 
-Ask questions against your own PDFs. Upload a document, ask anything in plain English, get an answer with exact page citations — no hallucinations, no reaching outside the document.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.112.0-teal.svg)](https://fastapi.tiangolo.com/)
+[![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED.svg)](https://www.docker.com/)
 
-Built with FastAPI + ChromaDB + HuggingFace MiniLM embeddings + Gemini 2.5 Flash, with a Streamlit frontend.
-
----
-
-## How it works
-
-1. A PDF is uploaded and text is extracted page-by-page with PyMuPDF.
-2. Pages are split into overlapping chunks and embedded locally with `all-MiniLM-L6-v2`.
-3. Embeddings are stored in ChromaDB under a named collection.
-4. At query time, the question is embedded with the same model and the top-K most similar chunks are retrieved via cosine similarity.
-5. Retrieved chunks are sent to Gemini 2.5 Flash with a strict system prompt that forces citation of page numbers and filenames.
+CiteBase is a production-ready, multi-tenant RAG-as-a-Service API and document intelligence engine. It delivers factual, document-grounded answers with exact page-level citations, cross-encoder relevance reranking, automated web search fallback, asynchronous ingestion, and tenant-isolated cryptographic caching.
 
 ---
 
-## Stack
+## Key Architectural Highlights
 
-| Layer | Library |
-|---|---|
-| API | FastAPI + Uvicorn |
-| Frontend | Streamlit |
-| PDF parsing | PyMuPDF (fitz) |
-| Chunking | LangChain `RecursiveCharacterTextSplitter` |
-| Embeddings | `sentence-transformers/all-MiniLM-L6-v2` (local) |
-| Vector store | ChromaDB (persistent, cosine distance) |
-| LLM | Google Gemini 2.5 Flash via `google-genai` SDK |
-
----
-
-## Prerequisites
-
-- Python 3.10+
-- A [Gemini API key](https://aistudio.google.com/app/apikey) (free tier works)
-- ~500 MB disk for the embedding model on first run
+- **Multi-Tenant Isolation & Authentication:** Cryptographically verified SHA-256 API keys with namespace-isolated vector collections and relational record boundaries.
+- **Hybrid Retrieval (Dense + Sparse):** Fuses ChromaDB dense semantic vector search (`all-MiniLM-L6-v2`) with BM25Okapi sparse keyword retrieval via Reciprocal Rank Fusion (RRF, $k=60$).
+- **Two-Stage Cross-Encoder Reranking:** Reorders candidate passages with `cross-encoder/ms-marco-MiniLM-L-6-v2` for high-precision citation attribution and distractor filtering ($MIN\_RELEVANCE\_SCORE = 0.20$).
+- **Web Search Fallback & Blending:** Transparently queries DuckDuckGo or Tavily when document confidence drops below threshold ($0.35$), with unified cross-encoder joint reranking for middle-band queries.
+- **High-Performance Redis Caching:** Deterministic SHA-256 tenant-partitioned caching bypassing vector search and LLM generation on cache hits (**20.9x speedup** on local docs, **349.2x** on web queries).
+- **Per-Key Rate Limiting:** Redis atomic TTL counter enforcing requests-per-minute quotas with standards-compliant HTTP 429 `Retry-After` headers.
+- **Asynchronous Ingestion Pipeline:** Non-blocking PDF parsing, chunking, and indexing via FastAPI `BackgroundTasks` returning immediate HTTP 202 Accepted status with task polling and staleness detection.
+- **Production Containerization:** Orchestrated three-tier architecture (FastAPI API + PostgreSQL 16 + Redis 7) with Docker healthchecks, non-root runtime security, and lightweight CPU-optimized PyTorch.
 
 ---
 
-## Setup
+## Technology Stack
 
-```bash
-git clone https://github.com/GurutejaReddy-04/rag-document-intelligence.git
-cd rag-document-intelligence
-
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-
-pip install -r requirements.txt
-
-cp env.example .env
-# Edit .env and set GEMINI_API_KEY
-```
-
----
-
-## Running
-
-Start the API and the frontend in separate terminals:
-
-```bash
-# Terminal 1 — backend
-cd backend
-uvicorn main:app --reload --port 8000
-
-# Terminal 2 — frontend
-cd frontend
-streamlit run app.py
-```
-
-Open [http://localhost:8501](http://localhost:8501).
-
----
-
-## API reference
-
-The FastAPI docs are available at `http://localhost:8000/docs` when the server is running.
-
-| Method | Endpoint | Description |
+| Layer | Technology | Purpose |
 |---|---|---|
-| `POST` | `/upload` | Ingest a PDF into a named collection |
-| `POST` | `/query` | Ask a question, get a cited answer |
-| `GET` | `/collections` | List all collections |
-| `DELETE` | `/collections/{name}` | Delete a collection |
-| `POST` | `/reset` | Wipe all collections |
-| `GET` | `/health` | Liveness check |
-
-**Upload example:**
-
-```bash
-curl -X POST http://localhost:8000/upload \
-  -F "file=@report.pdf" \
-  -F "collection_name=q3-report" \
-  -F "force=false"
-```
-
-**Query example:**
-
-```bash
-curl -X POST http://localhost:8000/query \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What were the key risks?", "collection_name": "q3-report"}'
-```
+| **CiteBase Core Engine** | Python 3.10+ / LangChain 0.2 / PyMuPDF | Boundary-aware PDF chunking, metadata enrichment, and RAG orchestration |
+| **API Framework** | FastAPI 0.112.0 + Uvicorn | High-throughput asynchronous ASGI web server |
+| **Relational Database** | PostgreSQL 16 / SQLite | Multi-tenant auth, API keys, ingestion tasks, and query audit logging |
+| **ORM** | SQLAlchemy 2.0 | Type-safe relational database schema management |
+| **Vector Database** | ChromaDB 0.5.5 | Persistent dense vector embeddings with cosine similarity |
+| **Sparse Search** | rank-bm25 0.2.2 | In-memory and disk-persisted BM25Okapi keyword indexing |
+| **Embeddings** | HuggingFace `all-MiniLM-L6-v2` | Fast 384-dimensional dense semantic embeddings |
+| **Reranker** | Cross-Encoder `ms-marco-MiniLM-L-6-v2` | Full cross-attention query-document passage reranking |
+| **LLM Engine** | Google Gemini API (Configurable via `GEMINI_MODEL`, `google-genai` SDK) | Grounded generative synthesis with strict citation formatting |
+| **Cache & Rate Limit** | Redis 7-Alpine / FakeRedis | Low-latency response caching and minute-bucket rate limiting |
+| **Web Fallback** | DuckDuckGo (`ddgs`) / Tavily REST API | Live web search augmentation for out-of-domain questions |
+| **PDF Extraction** | PyMuPDF (`fitz`) | Structure-aware header detection, breadcrumbs, and noise filtering |
+| **Containerization** | Docker & Docker Compose | Multi-container deployment with healthchecks and non-root execution |
+| **Frontend UI** | HTML5, CSS3, JavaScript (ES6+) | Vanilla client with multi-collection selection, telemetry, and citations |
 
 ---
 
-## Configuration
+## Architecture & Design Decisions
 
-All options are set via environment variables (copy `env.example` to `.env`):
+### Authentication & Multi-Tenant Design
 
-| Variable | Default | Notes |
-|---|---|---|
-| `GEMINI_API_KEY` | — | **Required** |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Any Gemini model string |
-| `CHROMA_PATH` | `chroma_db` | Where ChromaDB persists to disk |
-| `UPLOAD_DIR` | `data/uploaded_docs` | Temp storage for uploads |
-| `CHUNK_SIZE` | `500` | Characters per chunk; increase for dense technical docs |
-| `CHUNK_OVERLAP` | `50` | Overlap between chunks |
-| `TOP_K_RESULTS` | `5` | Number of chunks retrieved per query |
-| `ALLOWED_ORIGINS` | `http://localhost:8501` | Comma-separated CORS origins |
-| `API_URL` | `http://localhost:8000` | Backend URL used by the Streamlit frontend |
+CiteBase is architected as a B2B multi-tenant developer platform, not a consumer chat application. System interactions are governed by tenant boundaries enforced across storage, retrieval, and rate-limiting layers:
+
+- **Cryptographic Key Resolution:** Authentication is cryptographically tied to a Tenant ID via SHA-256 key hashing. Raw API keys are never stored; incoming requests are validated against stored hashes to extract the corresponding tenant context.
+- **Tenant-Scoped Storage:** Document records, ingestion task queues, vector embeddings in ChromaDB (`t_{tenant_id}_{collection}`), and sparse BM25 inverted indices are partitioned by tenant namespace. Tenants cannot access or discover assets belonging to other organizations.
+- **Developer Playground Interface:** The frontend API key input serves as a tenant-switching mechanism for development, QA, and evaluation purposes—analogous to the API key playgrounds provided by Stripe, Pinecone, and OpenAI. It allows evaluators to simulate distinct client tenants and verify strict data isolation without issuing manual terminal commands.
+- **Production Deployment Model:** In a production consumer deployment, this client-side input is replaced by OAuth2 or SSO authentication, with the API gateway or backend resolving tenant identity directly from the authenticated session context.
+
+### Metadata Filtering & Layout Preservation
+
+CiteBase supports optional metadata attribution and partition filtering during ingestion and query execution:
+
+- **Canonical Document Titles:** Supplying a document title overrides arbitrary filesystem filenames in chunk headers and LLM generation prompts (`[Document: <Canonical Title> | Section: ... | Page: ...]`). This ensures precise, publication-ready bracketed citations in synthesized responses.
+- **Category-Based Metadata Filtering:** Documents can be tagged with operational categories (such as engineering, legal, or research). During retrieval, passing a category filter applies native SQL-style constraints to both ChromaDB dense vector queries (`where={"category": ...}`) and BM25 sparse scans, restricting candidate selection to relevant document subsets prior to cross-encoder reranking.
 
 ---
 
-## Project structure
+## Evaluation & Benchmark Results
+
+Evaluated on a held-out, non-contaminated benchmark dataset of 25 structured queries across 205 corpus pages (see [`EVALUATION_REPORT.md`](EVALUATION_REPORT.md)):
+
+| Metric | Hybrid RRF Only (Reranker OFF) | Two-Stage Cross-Encoder (Reranker ON) | Impact |
+|---|:---:|:---:|:---:|
+| **Hit Rate @ 1** | 80.0% | **100.0%** | **+20.0%** |
+| **Hit Rate @ 3** | 80.0% | **100.0%** | **+20.0%** |
+| **Hit Rate @ 5** | 80.0% | **100.0%** | **+20.0%** |
+| **MRR (Mean Reciprocal Rank)** | 0.8000 | **1.0000** | **+0.2000** |
+| **Out-of-Domain Fallback Accuracy** | 0.0% | **100.0%** | **+100.0%** |
+| **Median P50 Cache Hit Latency** | — | **18.84 ms** (Local) / **24.73 ms** (Web) | **20.9x–349.2x Speedup** |
+
+---
+
+## Repository Structure
 
 ```
 .
 ├── backend/
-│   ├── config.py    # Environment variable loading
-│   ├── db.py        # ChromaDB singleton client
-│   ├── generator.py # Gemini prompt assembly and API call
-│   ├── ingest.py    # PDF extraction, chunking, embedding, and storage
-│   ├── main.py      # FastAPI app and route definitions
-│   └── retriever.py # Similarity search against ChromaDB
+│   ├── auth.py              # Cryptographic API key hashing & tenant dependency injection
+│   ├── bm25.py              # BM25Okapi sparse search indexing & disk persistence
+│   ├── cache.py             # Tenant-scoped Redis query-response caching & invalidation
+│   ├── chroma.py            # Thread-safe ChromaDB PersistentClient singleton
+│   ├── config.py            # Environment configuration & validation
+│   ├── database.py          # SQLAlchemy database engine, sessionmaker & init
+│   ├── generator.py         # Gemini prompt assembly, citation enforcement & retries
+│   ├── ingest.py            # Structure-aware PDF extraction, breadcrumbs & chunking
+│   ├── main.py              # FastAPI application, route handlers & latency middleware
+│   ├── models.py            # SQLAlchemy relational ORM models (Tenant, User, ApiKey, etc.)
+│   ├── rate_limiter.py      # Redis atomic TTL per-minute rate limiting middleware
+│   ├── reranker.py          # Cross-Encoder candidate passage reranking & filtering
+│   ├── retriever.py         # Hybrid search fusion (Dense + BM25 via RRF)
+│   ├── tasks.py             # Background worker for asynchronous document ingestion
+│   └── web_search.py        # DuckDuckGo and Tavily web fallback providers
 ├── frontend/
-│   └── app.py       # Streamlit frontend
-├── .gitignore
-├── LICENSE
-├── README.md
-├── env.example
-└── requirements.txt
+│   ├── index.html           # Accessible document intelligence portal UI
+│   ├── styles.css           # Modern CSS styling with badge & pill classes
+│   └── app.js               # Reactive frontend logic, task polling & dynamic rendering
+├── tests/
+│   ├── test_api.py          # API route verification & error path test suite
+│   ├── test_async_ingest.py # Asynchronous upload polling & staleness test suite
+│   ├── test_cache.py        # Redis caching, TTL, and tenant isolation test suite
+│   ├── test_multi_tenancy.py# Namespace scoping & rate limiter test suite
+│   └── eval/                # 25-question evaluation framework & benchmark runner
+├── Dockerfile               # Multi-stage production container with non-root user (appuser)
+├── docker-compose.yml       # Production services orchestration (API, Postgres, Redis)
+├── requirements.txt         # Pinned Python dependencies with CPU-optimized PyTorch
+├── requirements-dev.txt     # Development & testing dependencies (pytest, httpx, coverage)
+├── .env.example             # Comprehensive environment configuration template
+├── .dockerignore            # Build context exclusions
+├── .gitignore               # Repository file exclusions
+├── scripts/                 # Server lifecycle & operational utility scripts (stop.ps1, stop.sh)
+├── EVALUATION_REPORT.md     # Detailed evaluation benchmarks and latency profiles
+└── LICENSE                  # MIT License
 ```
 
 ---
 
-## Collection naming rules
+## Configuration (.env)
 
-ChromaDB enforces constraints on collection names:
+Copy the configuration template:
+```bash
+cp .env.example .env
+```
 
-- 3 to 63 characters
-- Letters, digits, hyphens (`-`), and underscores (`_`) only
-- Must start and end with a letter or digit
-
-Valid: `q3-report`, `ml_paper_2024`, `my-resume`  
-Invalid: `_test`, `a`, `name with spaces`
+| Variable | Default | Description |
+|---|---|---|
+| `ENV` | `development` | Deployment environment (`development` or `production`) |
+| `AUTH_ENABLED` | `true` | Enforce API key authentication |
+| `DATABASE_URL` | `sqlite:///./data/app.db` | PostgreSQL URL for Docker/Prod or SQLite for local dev |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL for caching and rate limits |
+| `BOOTSTRAP_API_KEY` | `sk_live_dev_test_key_master_12345` | Default development master API key |
+| `DEFAULT_RATE_LIMIT_RPM` | `60` | Default request quota per minute per key |
+| `GEMINI_API_KEY` | — | Google Gemini API key (**Required for generation**) |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Generative model ID |
+| `ENABLE_WEB_SEARCH` | `true` | Allow fallback to internet search on low confidence |
+| `WEB_SEARCH_PROVIDER` | `duckduckgo` | Web provider (`duckduckgo` or `tavily`) |
+| `TAVILY_API_KEY` | — | Optional API key for Tavily search provider |
+| `WEB_SEARCH_FALLBACK_THRESHOLD` | `0.35` | Minimum rerank score before triggering web fallback |
+| `CHROMA_PATH` | `chroma_db` | Persistent ChromaDB storage directory |
+| `UPLOAD_DIR` | `data/uploaded_docs` | Temporary upload directory for PDF processing |
+| `ENABLE_RERANKER` | `true` | Enable Cross-Encoder candidate reordering |
+| `RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Sentence-transformers reranking model |
+| `MIN_RELEVANCE_SCORE` | `0.20` | Minimum score to retain chunk in prompt context |
+| `CACHE_ENABLED` | `true` | Enable Redis query caching |
+| `CACHE_TTL_SECONDS` | `3600` | Cache time-to-live in seconds (1 hour default) |
+| `ALLOWED_ORIGINS` | `http://localhost:8000,http://localhost:3000` | Allowed CORS origins |
 
 ---
 
-## Re-ingesting a document
+## Running the Application
 
-By default, uploading a file that already exists in a collection is a no-op (to prevent duplicates). To replace the existing chunks, set `force=true` in the upload form or API call.
+### Option A: Docker Compose (Recommended)
+
+Starts the complete multi-container production stack (PostgreSQL + Redis + API):
+
+```bash
+docker compose up -d --build
+```
+
+Verify service health:
+```bash
+docker compose ps
+```
+All three services (`rag_postgres`, `rag_redis`, `rag_api`) will show status `healthy`.
+
+Access the application:
+- Web Interface: [http://localhost:8000](http://localhost:8000) or open `frontend/index.html`
+- Interactive OpenAPI Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+- Health Check: [http://localhost:8000/health](http://localhost:8000/health)
+
+### Option B: Local Python Environment
+
+```bash
+# 1. Create and activate virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# 2. Install dependencies (include dev dependencies for running tests)
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+
+# 3. Launch FastAPI server
+cd backend
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+---
+
+## API Reference
+
+All requests (except `/health`) require the `X-API-Key` authentication header.
+
+| Method | Endpoint | Description | Auth Required |
+|---|---|---|:---:|
+| `POST` | `/upload` | Asynchronously upload & ingest PDF into a collection (returns `HTTP 202` with `task_id`) | Yes |
+| `GET` | `/tasks/{task_id}` | Poll background ingestion task status, chunk count, and errors | Yes |
+| `GET` | `/tasks` | List recent ingestion tasks for the authenticated tenant | Yes |
+| `POST` | `/query` | Hybrid search, reranking, web fallback & cited answer generation | Yes |
+| `GET` | `/collections` | List all scoped collections belonging to the authenticated tenant | Yes |
+| `DELETE` | `/collections/{name}` | Delete a collection and its vector/BM25 indices | Yes |
+| `POST` | `/reset` | Wipe all collections belonging to the calling tenant | Yes |
+| `POST` | `/admin/api-keys` | Provision a new API key with custom rate limits | Yes (Admin) |
+| `GET` | `/admin/api-keys` | List active API keys and usage quotas for current tenant | Yes |
+| `GET` | `/health` | Liveness check reporting API, database, and cache status | No |
+
+---
+
+## Running Tests
+
+Run the full automated test suite (29 tests covering endpoints, multi-tenancy, async ingestion, caching, and hybrid retrieval):
+
+```bash
+pytest tests/ -v
+```
+
+---
+
+## Author
+
+Built by **[Guruteja Reddy N](https://github.com/GurutejaReddy-04)**.
 
 ---
 
 ## License
 
-MIT
+MIT License. See [LICENSE](LICENSE) for details.  
+Copyright (c) 2026 Guruteja Reddy N.

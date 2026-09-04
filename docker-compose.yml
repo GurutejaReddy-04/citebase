@@ -1,0 +1,119 @@
+services:
+  # --------------------------------------------------------------------------
+  # 1. PostgreSQL Database Service (Tenant auth, API keys, tasks, query audit logs)
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: rag_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rag_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rag_secure_password_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-rag_service}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rag_admin} -d ${POSTGRES_DB:-rag_service}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - rag_network
+
+  # --------------------------------------------------------------------------
+  # 2. Redis Cache & Rate Limiting Service
+  # --------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: rag_redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - rag_network
+
+  # --------------------------------------------------------------------------
+  # 3. Multi-Tenant RAG API Service (FastAPI + ChromaDB + Cross-Encoder + Cache)
+  # --------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag_api
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    environment:
+      ENV: ${ENV:-production}
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-rag_admin}:${POSTGRES_PASSWORD:-rag_secure_password_2026}@postgres:5432/${POSTGRES_DB:-rag_service}
+      REDIS_URL: redis://redis:6379/0
+      DEFAULT_RATE_LIMIT_RPM: ${DEFAULT_RATE_LIMIT_RPM:-60}
+      BOOTSTRAP_API_KEY: ${BOOTSTRAP_API_KEY:-sk_live_dev_test_key_master_12345}
+      
+      # Caching
+      CACHE_ENABLED: ${CACHE_ENABLED:-true}
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-3600}
+      
+      # Storage Paths
+      CHROMA_PATH: /app/chroma_db
+      UPLOAD_DIR: /app/data/uploaded_docs
+      
+      # LLM & Search
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      ENABLE_WEB_SEARCH: ${ENABLE_WEB_SEARCH:-true}
+      WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-duckduckgo}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      WEB_SEARCH_FALLBACK_THRESHOLD: ${WEB_SEARCH_FALLBACK_THRESHOLD:-0.35}
+      
+      # Retrieval & Reranker Config
+      ENABLE_RERANKER: ${ENABLE_RERANKER:-true}
+      INITIAL_RETRIEVAL_K: ${INITIAL_RETRIEVAL_K:-10}
+      TOP_K_RESULTS: ${TOP_K_RESULTS:-4}
+      MIN_RELEVANCE_SCORE: ${MIN_RELEVANCE_SCORE:-0.20}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - chroma_data:/app/chroma_db
+      - uploaded_docs:/app/data/uploaded_docs
+      - bm25_data:/app/data/bm25_indices
+      - hf_cache:/app/data/hf_cache
+    networks:
+      - rag_network
+
+volumes:
+  postgres_data:
+    name: rag_postgres_data
+  redis_data:
+    name: rag_redis_data
+  chroma_data:
+    name: rag_chroma_data
+  uploaded_docs:
+    name: rag_uploaded_docs
+  bm25_data:
+    name: rag_bm25_data
+  hf_cache:
+    name: rag_hf_cache
+
+networks:
+  rag_network:
+    name: rag_network
+    driver: bridge
