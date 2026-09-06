@@ -1,5 +1,5 @@
 """
-FastAPI entry point for Multi-Tenant Production RAG-as-a-Service API.
+FastAPI entry point for CiteBase — Multi-Tenant Production RAG-as-a-Service API.
 
 Features:
 - Cryptographic API Key Authentication (256-bit entropy)
@@ -111,8 +111,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 # --- app ---
 app = FastAPI(
-    title="Production RAG-as-a-Service API",
-    description="Multi-tenant Document Intelligence API with Hybrid Search, Cross-Encoder Reranking, Web Fallback, and API Key Auth.",
+    title="CiteBase — Production RAG-as-a-Service API",
+    description=(
+        "Multi-tenant document intelligence API featuring hybrid search (Dense + BM25), "
+        "cross-encoder reranking, Redis caching, async ingestion, and grounded answer synthesis."
+    ),
     version="2.0.0",
     lifespan=lifespan,
 )

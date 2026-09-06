@@ -1,7 +1,13 @@
-# Multi-Tenant Production RAG-as-a-Service API
+# CiteBase — Production RAG-as-a-Service API
+# Multi-Tenant Document Intelligence Engine
 # Python 3.10 slim base image for optimal footprint and security
 
 FROM python:3.10-slim
+
+LABEL org.opencontainers.image.title="CiteBase" \
+      org.opencontainers.image.description="Production RAG-as-a-Service — Multi-Tenant Document Intelligence API" \
+      org.opencontainers.image.version="2.0.0" \
+      org.opencontainers.image.authors="Guruteja Reddy N"
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \

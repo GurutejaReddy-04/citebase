@@ -1,4 +1,5 @@
-# CiteBase — Document-Grounded Q&A with Page-Level Citations
+# CiteBase — Production RAG-as-a-Service
+> **Multi-Tenant Document Intelligence API**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg)](https://www.python.org/)

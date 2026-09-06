@@ -1,5 +1,5 @@
 """
-SQLAlchemy ORM Models for Multi-Tenant RAG-as-a-Service Architecture.
+SQLAlchemy ORM Models for CiteBase Multi-Tenant RAG-as-a-Service Architecture.
 Defines schemas for tenants, users, api_keys, documents, and query audit logs.
 """
 

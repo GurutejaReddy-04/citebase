@@ -1,10 +1,10 @@
 services:
   # --------------------------------------------------------------------------
-  # 1. PostgreSQL Database Service (Tenant auth, API keys, tasks, query audit logs)
+  # 1. CiteBase PostgreSQL Database Service (Tenant auth, API keys, tasks, query audit logs)
   # --------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
-    container_name: rag_postgres
+    container_name: citebase-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-rag_admin}
@@ -21,14 +21,14 @@ services:
       retries: 5
       start_period: 10s
     networks:
-      - rag_network
+      - citebase_network
 
   # --------------------------------------------------------------------------
-  # 2. Redis Cache & Rate Limiting Service
+  # 2. CiteBase Redis Cache & Rate Limiting Service
   # --------------------------------------------------------------------------
   redis:
     image: redis:7-alpine
-    container_name: rag_redis
+    container_name: citebase-redis
     restart: unless-stopped
     command: redis-server --save 60 1 --loglevel warning
     volumes:
@@ -42,16 +42,16 @@ services:
       retries: 5
       start_period: 5s
     networks:
-      - rag_network
+      - citebase_network
 
   # --------------------------------------------------------------------------
-  # 3. Multi-Tenant RAG API Service (FastAPI + ChromaDB + Cross-Encoder + Cache)
+  # 3. CiteBase Multi-Tenant RAG API Service (FastAPI + ChromaDB + Cross-Encoder + Cache)
   # --------------------------------------------------------------------------
   api:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: rag_api
+    container_name: citebase-api
     restart: unless-stopped
     env_file:
       - .env
@@ -97,23 +97,23 @@ services:
       - bm25_data:/app/data/bm25_indices
       - hf_cache:/app/data/hf_cache
     networks:
-      - rag_network
+      - citebase_network
 
 volumes:
   postgres_data:
-    name: rag_postgres_data
+    name: citebase_postgres_data
   redis_data:
-    name: rag_redis_data
+    name: citebase_redis_data
   chroma_data:
-    name: rag_chroma_data
+    name: citebase_chroma_data
   uploaded_docs:
-    name: rag_uploaded_docs
+    name: citebase_uploaded_docs
   bm25_data:
-    name: rag_bm25_data
+    name: citebase_bm25_data
   hf_cache:
-    name: rag_hf_cache
+    name: citebase_hf_cache
 
 networks:
-  rag_network:
-    name: rag_network
+  citebase_network:
+    name: citebase_network
     driver: bridge

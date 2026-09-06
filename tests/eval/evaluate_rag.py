@@ -1,7 +1,7 @@
 """
 Comprehensive RAG Evaluation Framework with LLM-as-Judge Faithfulness Metrics.
 
-Runs the held-out 25-question benchmark dataset against the RAG system,
+Runs the held-out 25-question benchmark dataset against the CiteBase retrieval engine,
 evaluating:
 1. Retrieval Metrics: Hit Rate@1, Hit Rate@3, Hit Rate@5, MRR
 2. Generation & Groundedness: LLM-as-Judge Faithfulness, Citation Precision
