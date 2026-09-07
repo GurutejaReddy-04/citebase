@@ -5,14 +5,17 @@ and risks hitting open-file limits.
 """
 
 import threading
+from typing import Optional
+
 import chromadb
+from chromadb.api import ClientAPI
 from config import CHROMA_PATH
 
-_client = None
+_client: Optional[ClientAPI] = None
 _lock = threading.Lock()
 
 
-def get_chroma_client() -> chromadb.PersistentClient:
+def get_chroma_client() -> ClientAPI:
     """Return the process-wide PersistentClient, creating it on first call."""
     global _client
     if _client is None:

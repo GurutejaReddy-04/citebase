@@ -7,7 +7,7 @@ Supports PostgreSQL in containerized production and SQLite for low-overhead loca
 import os
 from typing import Generator
 from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
 
 from config import DATABASE_URL
 
@@ -30,7 +30,10 @@ engine = create_engine(
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+
+
+class Base(DeclarativeBase):
+    pass
 
 
 def get_db() -> Generator[Session, None, None]:

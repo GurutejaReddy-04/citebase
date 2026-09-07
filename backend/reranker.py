@@ -60,7 +60,7 @@ def rerank_documents(
 
     model = get_reranker()
 
-    pairs = [[query, doc.get("content", "")] for doc in documents]
+    pairs: Any = [(str(query), str(doc.get("content", ""))) for doc in documents]
 
     start_time = time.perf_counter()
     raw_scores = model.predict(pairs)

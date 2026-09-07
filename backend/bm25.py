@@ -114,14 +114,16 @@ def rebuild_bm25_from_chroma(collection_name: str) -> bool:
         logger.warning("Collection '%s' does not exist in ChromaDB; cannot rebuild BM25", collection_name)
         return False
 
-    records = coll.get(include=["documents", "metadatas"])
+    include_fields: list[Any] = ["documents", "metadatas"]
+    records = coll.get(include=include_fields)
     documents = records.get("documents") or []
-    metadatas = records.get("metadatas") or []
+    raw_metadatas = records.get("metadatas") or []
 
     if not documents:
         logger.warning("No documents found in collection '%s' to build BM25", collection_name)
         return False
 
+    metadatas = [dict(m) for m in raw_metadatas]
     build_and_save_bm25_index(collection_name, documents, metadatas)
     return True
 
@@ -138,25 +140,13 @@ def load_bm25_index(collection_name: str) -> Optional[dict[str, Any]]:
     file_path = _get_index_file_path(collection_name)
     legacy_pkl_path = os.path.join(CHROMA_PATH, f"{collection_name}_bm25.pkl")
 
-    # Migration: if legacy .pkl exists and no .json exists, convert and remove .pkl
-    if not os.path.exists(file_path) and os.path.exists(legacy_pkl_path):
+    # Safely remove any stale legacy .pkl file without deserializing untrusted binary
+    if os.path.exists(legacy_pkl_path):
         try:
-            import pickle
-            with open(legacy_pkl_path, "rb") as f:
-                old_data = pickle.load(f)
-            chunks = old_data.get("chunks") or []
-            metadatas = old_data.get("metadatas") or []
-            if chunks:
-                build_and_save_bm25_index(collection_name, chunks, metadatas)
+            os.remove(legacy_pkl_path)
+            logger.info("Removed legacy pickle file '%s'", legacy_pkl_path)
         except Exception:
-            logger.warning("Could not migrate legacy pickle file '%s'", legacy_pkl_path, exc_info=True)
-        finally:
-            try:
-                if os.path.exists(legacy_pkl_path):
-                    os.remove(legacy_pkl_path)
-                    logger.info("Migrated and removed legacy pickle file '%s'", legacy_pkl_path)
-            except Exception:
-                pass
+            pass
 
     if os.path.exists(file_path):
         try:

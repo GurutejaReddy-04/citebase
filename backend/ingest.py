@@ -11,6 +11,7 @@ import re
 import logging
 from collections import Counter
 from datetime import datetime, timezone
+from typing import Any, Optional
 
 import fitz  # PyMuPDF
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -138,7 +139,7 @@ def _detect_header_level(
     return None, clean
 
 
-def extract_document_structure(file_path: str, source_name: str = None) -> list[dict]:
+def extract_document_structure(file_path: str, source_name: Optional[str] = None) -> list[dict]:
     """
     Extract text elements with structural hierarchy, breadcrumbs, and coalesced paragraphs.
     """
@@ -149,7 +150,7 @@ def extract_document_structure(file_path: str, source_name: str = None) -> list[
 
     # Optional: Map PDF bookmarks/TOC if available
     toc = doc.get_toc()  # [[lvl, title, page], ...]
-    toc_by_page = {}
+    toc_by_page: dict[int, list[tuple[int, str]]] = {}
     if toc:
         for item in toc:
             lvl, title, pno = item[0], item[1].strip(), item[2]
@@ -171,7 +172,7 @@ def extract_document_structure(file_path: str, source_name: str = None) -> list[
         text_dict = page.get_text("dict")
         blocks = text_dict.get("blocks", [])
 
-        current_paragraphs = []
+        current_paragraphs: list[str] = []
 
         def flush_page_body():
             if current_paragraphs:
@@ -210,7 +211,7 @@ def extract_document_structure(file_path: str, source_name: str = None) -> list[
                 continue
 
             # Process lines in block
-            curr_block_body = []
+            curr_block_body: list[str] = []
             for line_text, max_size, is_bold in block_line_tuples:
                 level, title = _detect_header_level(line_text, max_size, is_bold, body_font_size)
                 if level is not None:
@@ -235,7 +236,7 @@ def extract_document_structure(file_path: str, source_name: str = None) -> list[
 
 
 
-def load_pdf(file_path: str, source_name: str = None) -> list[dict]:
+def load_pdf(file_path: str, source_name: Optional[str] = None) -> list[dict]:
     """
     Extract text and layout hierarchy from a PDF document.
 
@@ -246,9 +247,9 @@ def load_pdf(file_path: str, source_name: str = None) -> list[dict]:
 
 def chunk_documents(
     elements: list[dict],
-    doc_title: str = None,
-    category: str = None,
-    upload_date: str = None,
+    doc_title: Optional[str] = None,
+    category: Optional[str] = None,
+    upload_date: Optional[str] = None,
 ) -> tuple[list[str], list[dict]]:
     """
     Split structured document elements into semantic, boundary-aware chunks
@@ -380,9 +381,9 @@ def ingest_pdf(
     file_path: str,
     collection_name: str,
     force: bool = False,
-    source_name: str = None,
-    doc_title: str = None,
-    category: str = None,
+    source_name: Optional[str] = None,
+    doc_title: Optional[str] = None,
+    category: Optional[str] = None,
 ) -> str:
     """Full pipeline: PDF -> structured elements -> enriched semantic chunks -> ChromaDB."""
     effective_source = source_name or os.path.basename(file_path)

@@ -176,7 +176,7 @@ def retrieve_context(
                 embedding_function=embeddings,
             )
 
-            search_kwargs = {"k": candidate_pool_size}
+            search_kwargs: dict[str, Any] = {"k": candidate_pool_size}
             if filters and isinstance(filters, dict) and len(filters) > 0:
                 search_kwargs["filter"] = filters
 

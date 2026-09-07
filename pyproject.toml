@@ -37,3 +37,9 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+plugins = ["sqlalchemy.ext.mypy.plugin"]
+

@@ -556,17 +556,17 @@ def query_document(
         existing_colls = {c.name for c in chroma_client.list_collections()}
 
         scoped_collections = []
-        for c in target_collections:
-            scoped_c = tenant.get_scoped_collection_name(c)
+        for coll_target in target_collections:
+            scoped_c = tenant.get_scoped_collection_name(coll_target)
             if scoped_c in existing_colls:
                 scoped_collections.append(scoped_c)
             elif (
                 tenant.tenant_id == "default_tenant_id"
-                and c in existing_colls
-                and not c.startswith("t_")
-                and not c.startswith("tenant_")
+                and coll_target in existing_colls
+                and not coll_target.startswith("t_")
+                and not coll_target.startswith("tenant_")
             ):
-                scoped_collections.append(c)
+                scoped_collections.append(coll_target)
             else:
                 scoped_collections.append(scoped_c)
 
@@ -643,26 +643,26 @@ def query_document(
         # Clean collection names on response (strip tenant_id prefix)
         prefix_to_strip = f"t_{tenant.tenant_id[:12]}_"
         formatted_sources = []
-        for c in final_context:
-            raw_c_name = c.get("collection_name")
+        for ctx_item in final_context:
+            raw_c_name = ctx_item.get("collection_name")
             display_coll = raw_c_name.replace(prefix_to_strip, "") if raw_c_name else None
             formatted_sources.append(
                 SourceReference(
-                    page=c.get("page", 1),
-                    source=c.get("source", ""),
-                    score=c.get("score", 0.0),
-                    source_type=c.get("source_type", "document"),
-                    url=c.get("url"),
-                    provider=c.get("provider"),
+                    page=ctx_item.get("page", 1),
+                    source=ctx_item.get("source", ""),
+                    score=ctx_item.get("score", 0.0),
+                    source_type=ctx_item.get("source_type", "document"),
+                    url=ctx_item.get("url"),
+                    provider=ctx_item.get("provider"),
                     collection_name=display_coll,
-                    section=c.get("section", "General"),
-                    breadcrumb=c.get("breadcrumb", "General"),
-                    doc_title=c.get("doc_title"),
-                    category=c.get("category"),
-                    upload_date=c.get("upload_date"),
-                    chunk_id=c.get("chunk_id"),
-                    rerank_score=c.get("rerank_score"),
-                    retrieval_channels=c.get("retrieval_channels"),
+                    section=ctx_item.get("section", "General"),
+                    breadcrumb=ctx_item.get("breadcrumb", "General"),
+                    doc_title=ctx_item.get("doc_title"),
+                    category=ctx_item.get("category"),
+                    upload_date=ctx_item.get("upload_date"),
+                    chunk_id=ctx_item.get("chunk_id"),
+                    rerank_score=ctx_item.get("rerank_score"),
+                    retrieval_channels=ctx_item.get("retrieval_channels"),
                 )
             )
 

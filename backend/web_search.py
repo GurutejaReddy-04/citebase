@@ -70,7 +70,7 @@ def search_tavily(
 
     try:
         url = "https://api.tavily.com/search"
-        payload = {
+        payload: dict[str, Any] = {
             "api_key": effective_key,
             "query": query,
             "max_results": max_results,

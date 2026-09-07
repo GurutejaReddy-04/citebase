@@ -84,10 +84,10 @@ Answer:"""
                     system_instruction=_SYSTEM_PROMPT,
                     max_output_tokens=1024,
                     temperature=0.2,
-                    request_options={"timeout": 30},
+                    http_options=types.HttpOptions(timeout=30000),
                 ),
             )
-            return response.text
+            return response.text or ""
 
         except Exception as e:
             last_error = e
