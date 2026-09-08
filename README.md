@@ -175,6 +175,8 @@ Access the application:
 - Interactive OpenAPI Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 - Health Check: [http://localhost:8000/health](http://localhost:8000/health)
 
+![CiteBase Document Intelligence Portal](docs/images/frontend-ui.png)
+
 ### Option B: Local Python Environment
 
 ```bash
