@@ -10,6 +10,15 @@ CiteBase is a production-ready, multi-tenant RAG-as-a-Service API and document i
 
 ---
 
+## 📖 Documentation Site
+
+A static documentation site is available at:  
+**[https://GurutejaReddy-04.github.io/citebase/](https://GurutejaReddy-04.github.io/citebase/)**
+
+This site provides a quick overview of the project, links to the API documentation, and the evaluation report.
+
+---
+
 ## Key Features
 
 - **Multi-tenant isolation with cryptographic API keys:** Cryptographically verified SHA-256 API keys with strict namespace-isolated vector collections and relational record boundaries.
