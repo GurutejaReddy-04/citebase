@@ -21,6 +21,10 @@
       --code-bg: #090d13;
     }
 
+    html {
+      scroll-behavior: smooth;
+    }
+
     * {
       box-sizing: border-box;
       margin: 0;
@@ -58,17 +62,33 @@
       display: inline-block;
       font-size: 0.75rem;
       font-weight: 600;
-      padding: 0.25rem 0.65rem;
+      padding: 0.28rem 0.75rem;
       border-radius: 9999px;
       background: #21262d;
       color: #c9d1d9;
       border: 1px solid var(--card-border);
+      text-decoration: none;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .badge:hover {
+      background: #30363d;
+      color: #ffffff;
+      border-color: #8b949e;
+      transform: translateY(-1px);
     }
 
     .badge.highlight {
       background: rgba(88, 166, 255, 0.15);
       color: var(--accent);
       border-color: rgba(88, 166, 255, 0.4);
+    }
+
+    .badge.highlight:hover {
+      background: rgba(88, 166, 255, 0.25);
+      color: #ffffff;
+      border-color: var(--accent);
     }
 
     h1 {
@@ -256,11 +276,11 @@
   <div class="container">
     <header>
       <div class="badge-bar">
-        <span class="badge highlight">Production Ready</span>
-        <span class="badge">Python 3.10+</span>
-        <span class="badge">FastAPI</span>
-        <span class="badge">Docker Compose</span>
-        <span class="badge">MIT License</span>
+        <a href="#benchmarks" class="badge highlight" title="View verified benchmark results">Production Ready</a>
+        <a href="https://www.python.org/" target="_blank" rel="noopener" class="badge" title="Python 3.10+">Python 3.10+</a>
+        <a href="https://fastapi.tiangolo.com/" target="_blank" rel="noopener" class="badge" title="FastAPI Framework">FastAPI</a>
+        <a href="https://github.com/GurutejaReddy-04/citebase/blob/main/docker-compose.yml" target="_blank" rel="noopener" class="badge" title="View docker-compose.yml">Docker Compose</a>
+        <a href="https://github.com/GurutejaReddy-04/citebase/blob/main/LICENSE" target="_blank" rel="noopener" class="badge" title="View MIT License">MIT License</a>
       </div>
       <h1>CiteBase</h1>
       <div class="subtitle">Production RAG-as-a-Service — Multi-Tenant Document Intelligence API</div>
@@ -338,7 +358,7 @@
       </div>
     </section>
 
-    <section>
+    <section id="benchmarks">
       <h2 class="section-title">Verified Benchmark Results</h2>
       <p style="color: var(--text-muted); font-size: 0.95rem;">
         Evaluated on a held-out benchmark suite across 205 pages of technical documentation (see <a href="https://github.com/GurutejaReddy-04/citebase/blob/main/EVALUATION_REPORT.md" style="color: var(--accent);">EVALUATION_REPORT.md</a>):
