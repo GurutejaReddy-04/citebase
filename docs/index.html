@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CiteBase — Production RAG-as-a-Service</title>
+  <meta name="description" content="CiteBase: Multi-Tenant Document Intelligence API with Hybrid Search, Cross-Encoder Reranking, Redis Caching, and Async Ingestion.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --card-border: #30363d;
+      --text-main: #f0f6fc;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --accent-hover: #79b8ff;
+      --success: #3fb950;
+      --code-bg: #090d13;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--bg);
+      color: var(--text-main);
+      line-height: 1.6;
+      padding: 0 1.5rem;
+    }
+
+    .container {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 4rem 0 6rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 4rem;
+    }
+
+    .badge-bar {
+      display: flex;
+      justify-content: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 1.5rem;
+    }
+
+    .badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.25rem 0.65rem;
+      border-radius: 9999px;
+      background: #21262d;
+      color: #c9d1d9;
+      border: 1px solid var(--card-border);
+    }
+
+    .badge.highlight {
+      background: rgba(88, 166, 255, 0.15);
+      color: var(--accent);
+      border-color: rgba(88, 166, 255, 0.4);
+    }
+
+    h1 {
+      font-size: 2.8rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      margin-bottom: 0.75rem;
+      background: linear-gradient(135deg, #ffffff 30%, #8b949e 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .subtitle {
+      font-size: 1.25rem;
+      color: var(--accent);
+      font-weight: 600;
+      margin-bottom: 1.25rem;
+    }
+
+    .lead {
+      font-size: 1.1rem;
+      color: var(--text-muted);
+      max-width: 720px;
+      margin: 0 auto 2rem;
+    }
+
+    .cta-group {
+      display: flex;
+      justify-content: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.4rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border-radius: 8px;
+      text-decoration: none;
+      transition: all 0.2s ease;
+    }
+
+    .btn-primary {
+      background-color: #238636;
+      color: #ffffff;
+    }
+
+    .btn-primary:hover {
+      background-color: #2ea043;
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background-color: var(--card-bg);
+      color: var(--text-main);
+      border: 1px solid var(--card-border);
+    }
+
+    .btn-secondary:hover {
+      background-color: #21262d;
+      border-color: #8b949e;
+      transform: translateY(-1px);
+    }
+
+    .section-title {
+      font-size: 1.6rem;
+      font-weight: 700;
+      margin: 3.5rem 0 1.5rem;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 0.75rem;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+      gap: 1.25rem;
+      margin-top: 1rem;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 1.5rem;
+      transition: border-color 0.2s ease, transform 0.2s ease;
+    }
+
+    .card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+
+    .card h3 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .card p {
+      font-size: 0.92rem;
+      color: var(--text-muted);
+      line-height: 1.55;
+    }
+
+    .preview-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      overflow: hidden;
+      margin-top: 2rem;
+    }
+
+    .preview-card-header {
+      background: #1c2128;
+      padding: 0.75rem 1.25rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--card-border);
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .preview-img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .metrics-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1.5rem;
+      background: var(--card-bg);
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--card-border);
+    }
+
+    .metrics-table th, .metrics-table td {
+      padding: 0.85rem 1.25rem;
+      text-align: left;
+      font-size: 0.92rem;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .metrics-table th {
+      background: #1c2128;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+
+    .metrics-table td:last-child {
+      color: var(--success);
+      font-weight: 600;
+    }
+
+    footer {
+      margin-top: 5rem;
+      text-align: center;
+      font-size: 0.88rem;
+      color: var(--text-muted);
+      border-top: 1px solid var(--card-border);
+      padding-top: 2rem;
+    }
+
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="badge-bar">
+        <span class="badge highlight">Production Ready</span>
+        <span class="badge">Python 3.10+</span>
+        <span class="badge">FastAPI</span>
+        <span class="badge">Docker Compose</span>
+        <span class="badge">MIT License</span>
+      </div>
+      <h1>CiteBase</h1>
+      <div class="subtitle">Production RAG-as-a-Service — Multi-Tenant Document Intelligence API</div>
+      <p class="lead">
+        A production-grade, multi-tenant document intelligence engine. Delivers factual, document-grounded answers with exact page-level citations, hybrid search (dense + sparse RRF), cross-encoder reranking, and sub-20ms Redis caching.
+      </p>
+      <div class="cta-group">
+        <a href="https://github.com/GurutejaReddy-04/citebase" class="btn btn-primary" target="_blank" rel="noopener">
+          <svg height="18" width="18" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+          View on GitHub
+        </a>
+        <a href="https://github.com/GurutejaReddy-04/citebase/blob/main/EVALUATION_REPORT.md" class="btn btn-secondary" target="_blank" rel="noopener">
+          📊 Benchmark Evaluation
+        </a>
+        <a href="http://localhost:8000/docs" class="btn btn-secondary" title="Active when backend API server is running locally">
+          ⚡ Local Swagger UI (/docs)
+        </a>
+      </div>
+    </header>
+
+    <section>
+      <h2 class="section-title">Key Architectural Features</h2>
+      <div class="features-grid">
+        <div class="card">
+          <h3>🔐 Multi-Tenant Isolation</h3>
+          <p>Cryptographically verified SHA-256 API keys with strict partition isolation across relational records and ChromaDB vector namespaces (<code>t_{tenant_id}_{collection}</code>).</p>
+        </div>
+        <div class="card">
+          <h3>⚡ Hybrid Retrieval & RRF</h3>
+          <p>Fuses 384-dimensional dense semantic vectors (<code>all-MiniLM-L6-v2</code>) with BM25Okapi sparse keyword retrieval using Reciprocal Rank Fusion (k=60).</p>
+        </div>
+        <div class="card">
+          <h3>🎯 Cross-Encoder Reranking</h3>
+          <p>Re-scores candidate passages using <code>ms-marco-MiniLM-L-6-v2</code> for precision citation attribution, elevating Hit Rate @ 1 from 80% to 100%.</p>
+        </div>
+        <div class="card">
+          <h3>🚀 Low-Latency Redis Caching</h3>
+          <p>Deterministic SHA-256 query caching with tenant-scoped TTLs, delivering 18.8ms median response times and up to 349.2x speedup on web queries.</p>
+        </div>
+        <div class="card">
+          <h3>📥 Asynchronous Ingestion</h3>
+          <p>Non-blocking PDF extraction, header hierarchy detection, and indexing via background tasks returning immediate HTTP 202 Accepted status.</p>
+        </div>
+        <div class="card">
+          <h3>🌐 Web Search Fallback</h3>
+          <p>Automatic live search fallback (DuckDuckGo/Tavily) with joint cross-encoder reranking when internal document confidence falls below threshold.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="section-title">Interactive Interface & API Specs</h2>
+      <div class="preview-card">
+        <div class="preview-card-header">
+          <span>Live Swagger UI (OpenAPI 3.1)</span>
+          <span><code>http://localhost:8000/docs</code></span>
+        </div>
+        <img class="preview-img" src="images/swagger-ui.png" alt="CiteBase Swagger UI API Documentation">
+      </div>
+
+      <div class="preview-card">
+        <div class="preview-card-header">
+          <span>Document Intelligence Portal</span>
+          <span><code>frontend/index.html</code></span>
+        </div>
+        <img class="preview-img" src="images/frontend-ui.png" alt="CiteBase Frontend Intelligence Interface">
+      </div>
+    </section>
+
+    <section>
+      <h2 class="section-title">Verified Benchmark Results</h2>
+      <p style="color: var(--text-muted); font-size: 0.95rem;">
+        Evaluated on a held-out benchmark suite across 205 pages of technical documentation (see <a href="https://github.com/GurutejaReddy-04/citebase/blob/main/EVALUATION_REPORT.md" style="color: var(--accent);">EVALUATION_REPORT.md</a>):
+      </p>
+      <table class="metrics-table">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Hybrid RRF Only</th>
+            <th>Two-Stage Cross-Encoder</th>
+            <th>Improvement</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Hit Rate @ 1</strong></td>
+            <td>80.0%</td>
+            <td><strong>100.0%</strong></td>
+            <td>+20.0%</td>
+          </tr>
+          <tr>
+            <td><strong>Hit Rate @ 3</strong></td>
+            <td>80.0%</td>
+            <td><strong>100.0%</strong></td>
+            <td>+20.0%</td>
+          </tr>
+          <tr>
+            <td><strong>MRR (Mean Reciprocal Rank)</strong></td>
+            <td>0.8000</td>
+            <td><strong>1.0000</strong></td>
+            <td>+0.2000</td>
+          </tr>
+          <tr>
+            <td><strong>Out-of-Domain Fallback</strong></td>
+            <td>0.0%</td>
+            <td><strong>100.0%</strong></td>
+            <td>+100.0%</td>
+          </tr>
+          <tr>
+            <td><strong>Median Cache Hit Latency</strong></td>
+            <td>—</td>
+            <td><strong>18.84 ms</strong></td>
+            <td>20.9x – 349.2x</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer>
+      <p>CiteBase is licensed under the <a href="https://github.com/GurutejaReddy-04/citebase/blob/main/LICENSE">MIT License</a>.</p>
+      <p style="margin-top: 0.5rem;">Built with pride by <a href="https://github.com/GurutejaReddy-04">Guruteja Reddy N</a>.</p>
+    </footer>
+  </div>
+</body>
+</html>
