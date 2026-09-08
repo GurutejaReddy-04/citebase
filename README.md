@@ -1,5 +1,5 @@
 # CiteBase — Production RAG-as-a-Service
-> **Multi-Tenant Document Intelligence API**
+<blockquote>Multi-Tenant Document Intelligence API</blockquote>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg)](https://www.python.org/)
@@ -10,16 +10,15 @@ CiteBase is a production-ready, multi-tenant RAG-as-a-Service API and document i
 
 ---
 
-## Key Architectural Highlights
+## Key Features
 
-- **Multi-Tenant Isolation & Authentication:** Cryptographically verified SHA-256 API keys with namespace-isolated vector collections and relational record boundaries.
-- **Hybrid Retrieval (Dense + Sparse):** Fuses ChromaDB dense semantic vector search (`all-MiniLM-L6-v2`) with BM25Okapi sparse keyword retrieval via Reciprocal Rank Fusion (RRF, $k=60$).
-- **Two-Stage Cross-Encoder Reranking:** Reorders candidate passages with `cross-encoder/ms-marco-MiniLM-L-6-v2` for high-precision citation attribution and distractor filtering ($MIN\_RELEVANCE\_SCORE = 0.20$).
-- **Web Search Fallback & Blending:** Transparently queries DuckDuckGo or Tavily when document confidence drops below threshold ($0.35$), with unified cross-encoder joint reranking for middle-band queries.
-- **High-Performance Redis Caching:** Deterministic SHA-256 tenant-partitioned caching bypassing vector search and LLM generation on cache hits (**20.9x speedup** on local docs, **349.2x** on web queries).
-- **Per-Key Rate Limiting:** Redis atomic TTL counter enforcing requests-per-minute quotas with standards-compliant HTTP 429 `Retry-After` headers.
-- **Asynchronous Ingestion Pipeline:** Non-blocking PDF parsing, chunking, and indexing via FastAPI `BackgroundTasks` returning immediate HTTP 202 Accepted status with task polling and staleness detection.
-- **Production Containerization:** Orchestrated three-tier architecture (FastAPI API + PostgreSQL 16 + Redis 7) with Docker healthchecks, non-root runtime security, and lightweight CPU-optimized PyTorch.
+- **Multi-tenant isolation with cryptographic API keys:** Cryptographically verified SHA-256 API keys with strict namespace-isolated vector collections and relational record boundaries.
+- **Hybrid search (dense vector + BM25) fused via RRF:** Fuses ChromaDB dense semantic vector search (`all-MiniLM-L6-v2`) with BM25Okapi sparse keyword retrieval via Reciprocal Rank Fusion (RRF, $k=60$).
+- **Cross-encoder reranking for precision citations:** Re-scores candidate passages with `cross-encoder/ms-marco-MiniLM-L-6-v2` for high-precision citation attribution and distractor filtering ($MIN\_RELEVANCE\_SCORE = 0.20$).
+- **Redis caching with tenant-scoped TTL (353x speedup):** Deterministic SHA-256 tenant-partitioned caching bypassing vector search and LLM generation on cache hits (**20.9x speedup** on local docs, **349.2x** on web queries).
+- **Async PDF ingestion with task polling:** Non-blocking PDF parsing, chunking, and indexing via FastAPI `BackgroundTasks` returning immediate HTTP 202 Accepted status with task polling and staleness detection.
+- **Web search fallback (DuckDuckGo/Tavily):** Transparently queries DuckDuckGo or Tavily when document confidence drops below threshold ($0.35$), with unified cross-encoder joint reranking for middle-band queries.
+- **Docker Compose orchestration (API + PostgreSQL + Redis):** Production three-tier architecture with automated container healthchecks, non-root security (`appuser`), and CPU-optimized PyTorch.
 
 ---
 
@@ -155,7 +154,7 @@ cp .env.example .env
 
 ---
 
-## Running the Application
+## Quick Start
 
 ### Option A: Docker Compose (Recommended)
 
@@ -198,6 +197,8 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 All requests (except `/health`) require the `X-API-Key` authentication header.
 
+![API Docs](docs/images/swagger-ui.png)
+
 | Method | Endpoint | Description | Auth Required |
 |---|---|---|:---:|
 | `POST` | `/upload` | Asynchronously upload & ingest PDF into a collection (returns `HTTP 202` with `task_id`) | Yes |
@@ -211,15 +212,21 @@ All requests (except `/health`) require the `X-API-Key` authentication header.
 | `GET` | `/admin/api-keys` | List active API keys and usage quotas for current tenant | Yes |
 | `GET` | `/health` | Liveness check reporting API, database, and cache status | No |
 
+### Grounded Query Response Sample
+
+![Query Response](docs/images/query-response.png)
+
 ---
 
 ## Running Tests
 
-Run the full automated test suite (29 tests covering endpoints, multi-tenancy, async ingestion, caching, and hybrid retrieval):
+Run the full automated test suite (44 tests covering endpoints, multi-tenancy, async ingestion, caching, edge cases, and hybrid retrieval):
 
 ```bash
 pytest tests/ -v
 ```
+
+![Automated Tests](docs/images/terminal.png)
 
 ---
 

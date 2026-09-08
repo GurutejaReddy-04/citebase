@@ -63,3 +63,10 @@ backend/data/
 
 # Chroma & BM25 binary cache files
 *.pkl
+*.pickle
+
+# Temporary & report files
+*.tmp
+*.temp
+reports/
+tmp_test_chroma/
