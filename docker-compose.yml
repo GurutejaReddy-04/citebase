@@ -8,7 +8,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-rag_admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rag_secure_password_2026}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Error: POSTGRES_PASSWORD environment variable must be set in .env}"
       POSTGRES_DB: ${POSTGRES_DB:-rag_service}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -60,10 +60,10 @@ services:
     environment:
       ENV: ${ENV:-production}
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-rag_admin}:${POSTGRES_PASSWORD:-rag_secure_password_2026}@postgres:5432/${POSTGRES_DB:-rag_service}
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-rag_admin}:${POSTGRES_PASSWORD:?Error: POSTGRES_PASSWORD environment variable must be set in .env}@postgres:5432/${POSTGRES_DB:-rag_service}"
       REDIS_URL: redis://redis:6379/0
       DEFAULT_RATE_LIMIT_RPM: ${DEFAULT_RATE_LIMIT_RPM:-60}
-      BOOTSTRAP_API_KEY: ${BOOTSTRAP_API_KEY:-sk_live_dev_test_key_master_12345}
+      BOOTSTRAP_API_KEY: "${BOOTSTRAP_API_KEY:?Error: BOOTSTRAP_API_KEY must be set in .env}"
       
       # Caching
       CACHE_ENABLED: ${CACHE_ENABLED:-true}

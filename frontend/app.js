@@ -47,21 +47,26 @@ const cachePill             = document.getElementById('cachePill');
 const answerDisplay         = document.getElementById('answerDisplay');
 const sourcesDisplay        = document.getElementById('sourcesDisplay');
 
-/* --- Authentication & Storage --- */
-const DEFAULT_DEV_KEY = 'sk_live_dev_test_key_master_12345';
-
+/* --- Authentication & Session Storage (Developer Playground) --- */
 function getApiKey() {
-  return (apiKeyInput ? apiKeyInput.value.trim() : '') || localStorage.getItem('citebase_api_key') || DEFAULT_DEV_KEY;
+  return (apiKeyInput ? apiKeyInput.value.trim() : '') || sessionStorage.getItem('citebase_playground_key') || '';
 }
 
 function saveApiKey(key) {
   if (apiKeyInput) apiKeyInput.value = key;
-  localStorage.setItem('citebase_api_key', key);
+  sessionStorage.setItem('citebase_playground_key', key);
 }
 
-// Initialize key from localStorage or dev default
+// Security remediation: remove legacy long-lived credentials from localStorage
+try {
+  localStorage.removeItem('citebase_api_key');
+} catch (e) {
+  // Gracefully handle sandboxed iframe environments
+}
+
+// Initialize key input strictly from active tab session
 if (apiKeyInput) {
-  apiKeyInput.value = localStorage.getItem('citebase_api_key') || DEFAULT_DEV_KEY;
+  apiKeyInput.value = sessionStorage.getItem('citebase_playground_key') || '';
 }
 
 if (toggleKeyVisibilityBtn) {

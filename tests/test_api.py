@@ -25,11 +25,13 @@ import main
 from main import app
 from config import BOOTSTRAP_API_KEY
 
+TEST_API_KEY = BOOTSTRAP_API_KEY or "sk_test_fixture_master_key_internal_only"
+
 # Mock generator so tests run independently of Gemini API quota
 main.generate_answer = lambda q, ctx: f"Mock Grounded Answer with {len(ctx)} sources for: {q}"
 
 client = TestClient(app)
-client.headers.update({"X-API-Key": BOOTSTRAP_API_KEY})
+client.headers.update({"X-API-Key": TEST_API_KEY})
 
 
 def test_collections_endpoint():
