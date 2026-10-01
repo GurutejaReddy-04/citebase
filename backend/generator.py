@@ -1,8 +1,4 @@
-"""
-Grounded answer generation via the Gemini API.
-
-Synthesizes context-grounded responses with strict bracketed numeric citations.
-"""
+"""Gemini API integration for answering queries based on retrieved context."""
 
 import logging
 import time

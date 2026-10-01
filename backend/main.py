@@ -175,7 +175,7 @@ def _validate_collection_name(name: str) -> None:
 
 # --- schemas ---
 class QueryRequest(BaseModel):
-    """Payload schema for hybrid document retrieval and cited QA generation."""
+    """Query request payload."""
     question:             str = Field(..., min_length=1, max_length=2000)
     collection_name:      Optional[str] = None
     collection_names:     Optional[list[str]] = None
@@ -186,7 +186,6 @@ class QueryRequest(BaseModel):
 
 
 class SourceReference(BaseModel):
-    """Metadata and citation attributes for a retrieved chunk or web result."""
     page:               int = 1
     source:             str
     score:              float
@@ -205,7 +204,6 @@ class SourceReference(BaseModel):
 
 
 class QueryResponse(BaseModel):
-    """Structured response containing synthesized answer, cited sources, and metadata."""
     answer:              str
     retrieval_mode:      str = "local_document"  # "local_document", "web_fallback", "blended", "cached"
     fallback_triggered:  bool = False
@@ -214,13 +212,11 @@ class QueryResponse(BaseModel):
 
 
 class CreateApiKeyRequest(BaseModel):
-    """Request schema to provision a new tenant API key."""
     name:           Optional[str] = "API Key"
     rate_limit_rpm: Optional[int] = 60
 
 
 class ApiKeyResponse(BaseModel):
-    """Public API key details with raw secret token included upon initial creation."""
     id:             str
     key_prefix:     str
     name:           str
@@ -229,7 +225,6 @@ class ApiKeyResponse(BaseModel):
 
 
 class TaskStatusResponse(BaseModel):
-    """Asynchronous background document ingestion task status and progress schema."""
     task_id:        str
     status:         str  # pending, processing, completed, failed, stale
     collection:     str

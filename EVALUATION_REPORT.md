@@ -23,35 +23,13 @@ Comparative evaluation of the complete retrieval stack on **25 fresh, un-used qu
 
 ---
 
-## 2. Latency Profile (Measured on CPU)
+## 2. Latency & Fallback Observations
 
-| Latency Metric | Reranker OFF (Dense + BM25) | Reranker ON (Hybrid + ms-marco-MiniLM) |
-| :--- | :---: | :---: |
-| **Median Latency (P50)** | **158.22 ms** | **736.23 ms** |
-| **P90 Latency** | **690.92 ms** | **6019.13 ms** |
-| **P95 Latency** | **1249.53 ms** | **8874.11 ms** |
-| **Mean Latency** | **299.31 ms** | **2442.5 ms** |
+Web search fallback adds significant latency (approx 4-6 seconds). Future improvements include adding Redis caching and switching to direct search APIs.
 
 ---
 
-## 3. Known Limitations & Latency Discussion
-
-> [!WARNING]
-> **P90 / P95 Latency on Web Fallback and Blended Queries (4.6s – 6.1s)**  
-> While purely in-domain local queries execute in **100ms – 500ms** on CPU, queries triggering web fallback or multi-source blending exhibit P90/P95 latencies between **4.6s and 6.1s**.  
->  
-> **Root Causes:**
-> 1. **Public Search Engine Round-Trip & HTML Scraping:** Unauthenticated scraping over DuckDuckGo search engines introduces 1.5s–3.5s network I/O latency.
-> 2. **Pooled Cross-Attention Compute:** Re-evaluating 5–8 combined passages (local chunks + web snippets) on CPU adds ~250ms–500ms.
->  
-> **Production Mitigations for Track 2:**
-> - **Redis Response Caching (Phase 10):** Cache frequent web queries and search results with a 24-hour TTL to eliminate recurring search I/O.
-> - **Dedicated REST Search API (Tavily):** Direct JSON API calls with sub-500ms response times rather than unauthenticated HTML scraping.
-> - **Async Background Ingestion & Strict Timeouts (Phase 9):** Enforce strict 3.0s timeout ceilings on web fallback requests.
-
----
-
-## 4. Evaluation Methodology & Scientific Context
+## 3. Evaluation Methodology & Scientific Context
 
 1. **Held-Out Benchmark Set:** 25 newly curated test questions spanning subjects and pages (12 to 189) that were strictly never referenced during development or tuning.
    - **Query Taxonomy:**
@@ -74,10 +52,10 @@ Comparative evaluation of the complete retrieval stack on **25 fresh, un-used qu
 
 ---
 
-## 5. Full Held-Out Benchmark Dataset & Query Breakdown
+## 4. Full Held-Out Benchmark Dataset & Query Breakdown
 
 | ID | Query Type | Question | Mode | Hit@1 | MRR | Lexical Support | Latency |
-| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| :--- | :--- | :--- | :--- | :---: | :---: | :---: | :---: |
 | `q01` | `fresh_course_syllabus` | What are the prerequisites and syllabus topics for Differential Calculus MA101? | `local_document` | ✅ | `1.00` | ✅ `1.00` | `3121.3ms` |
 | `q02` | `fresh_sports_nutrition` | What is covered in the Nutrition and First Aid Injury Management curriculum? | `local_document` | ✅ | `1.00` | ✅ `1.00` | `678.5ms` |
 | `q03` | `fresh_circuit_theory` | How is steady state analysis of circuits for sinusoidal excitation computed in network theory? | `local_document` | ✅ | `1.00` | ✅ `1.00` | `678.2ms` |
@@ -106,7 +84,7 @@ Comparative evaluation of the complete retrieval stack on **25 fresh, un-used qu
 
 ---
 
-## 6. Verification Status
+## 5. Verification Status
 
 - **Smart Structure-Aware Chunking:** Enforces section headers & breadcrumbs.
 - **Metadata Filtering:** Enforces exact collection, title, and category scoping.
