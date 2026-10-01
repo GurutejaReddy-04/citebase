@@ -1,4 +1,4 @@
-# CiteBase — Production RAG-as-a-Service
+# CiteBase — Multi-Tenant RAG-as-a-Service
 <blockquote>Multi-Tenant Document Intelligence API</blockquote>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -6,7 +6,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.112.0-teal.svg)](https://fastapi.tiangolo.com/)
 [![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED.svg)](https://www.docker.com/)
 
-CiteBase is a production-grade, multi-tenant RAG-as-a-Service API and document intelligence engine. It constrains generative synthesis to retrieved document context, delivering verifiable answers with exact page-level citations, cross-encoder relevance reranking, automated web search fallback routing, asynchronous ingestion, and tenant-isolated cryptographic caching.
+CiteBase is a Multi-Tenant RAG-as-a-Service API and document intelligence engine. It constrains generative synthesis to retrieved document context, delivering verifiable answers with exact page-level citations, cross-encoder relevance reranking, automated web search fallback routing, asynchronous ingestion, and tenant-isolated cryptographic caching.
 
 ---
 
@@ -27,7 +27,7 @@ This site provides a quick overview of the project, links to the API documentati
 - **Redis caching with tenant-scoped TTL (up to 349.2x speedup):** Deterministic SHA-256 tenant-partitioned caching bypassing vector search and LLM generation on cache hits (**13.7x speedup** in local offline benchmark with 150ms mock generation; **20.9x–349.2x speedup** under live cloud LLM latency with Gemini API and web fallback). Experimentally verifiable via `scripts/benchmark_cache.py`.
 - **Async PDF ingestion with task polling:** Non-blocking PDF parsing, chunking, and indexing via FastAPI `BackgroundTasks` returning immediate HTTP 202 Accepted status with task polling and staleness detection.
 - **Web search fallback (DuckDuckGo/Tavily):** Transparently queries DuckDuckGo or Tavily when document confidence drops below threshold ($0.35$), with unified cross-encoder joint reranking for middle-band queries.
-- **Docker Compose orchestration (API + PostgreSQL + Redis):** Production three-tier architecture with automated container healthchecks, non-root security (`appuser`), and CPU-optimized PyTorch.
+- **Docker Compose orchestration (API + PostgreSQL + Redis):** Reference three-tier architecture with automated container healthchecks, non-root security (`appuser`), and CPU-optimized PyTorch.
 
 ---
 
@@ -117,8 +117,8 @@ Evaluated on a held-out, non-contaminated benchmark dataset of 25 structured que
 │   ├── test_cache.py        # Redis caching, TTL, and tenant isolation test suite
 │   ├── test_multi_tenancy.py# Namespace scoping & rate limiter test suite
 │   └── eval/                # 25-question evaluation framework & benchmark runner
-├── Dockerfile               # Multi-stage production container with non-root user (appuser)
-├── docker-compose.yml       # Production services orchestration (API, Postgres, Redis)
+├── Dockerfile               # Multi-stage container with non-root user (appuser)
+├── docker-compose.yml       # Reference three-tier stack orchestration (API, Postgres, Redis)
 ├── requirements.txt         # Pinned Python dependencies with CPU-optimized PyTorch
 ├── requirements-dev.txt     # Development & testing dependencies (pytest, httpx, coverage)
 ├── .env.example             # Comprehensive environment configuration template
@@ -167,7 +167,7 @@ cp .env.example .env
 
 ### Option A: Docker Compose (Recommended)
 
-Starts the complete multi-container production stack (PostgreSQL + Redis + API):
+Starts the complete multi-container reference stack (PostgreSQL + Redis + API):
 
 ```bash
 docker compose up -d --build

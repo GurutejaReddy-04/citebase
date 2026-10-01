@@ -60,14 +60,27 @@ if not GEMINI_API_KEY:
     raise EnvironmentError("GEMINI_API_KEY is not set. Check your .env file.")
 
 DISALLOWED_PRODUCTION_BOOTSTRAP_KEYS = {
-    "sk_live_dev_test_key_master_12345",
     "sk_live_replace_with_your_own_master_key",
     "your_bootstrap_master_api_key_here",
 }
 
+def is_insecure_bootstrap_key(key: str | None) -> bool:
+    if not key or not key.strip():
+        return True
+    k = key.strip().lower()
+    if k in DISALLOWED_PRODUCTION_BOOTSTRAP_KEYS:
+        return True
+    # Disallow common development placeholders and insecure patterns
+    placeholder_tokens = ("replace", "placeholder", "master_12345", "test_key", "change_me")
+    if any(token in k for token in placeholder_tokens):
+        return True
+    if len(k) < 24:
+        return True
+    return False
+
 if ENV == "production":
-    if not BOOTSTRAP_API_KEY or BOOTSTRAP_API_KEY.strip() in DISALLOWED_PRODUCTION_BOOTSTRAP_KEYS:
+    if is_insecure_bootstrap_key(BOOTSTRAP_API_KEY):
         raise EnvironmentError(
             "FATAL: When ENV=production, BOOTSTRAP_API_KEY must be explicitly configured with a secure, "
-            "high-entropy key in your environment. Insecure default keys and template placeholders are disallowed."
+            "high-entropy key in your environment. Insecure default keys and development placeholders are disallowed."
         )

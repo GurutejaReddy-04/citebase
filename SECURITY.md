@@ -196,11 +196,11 @@ The production Docker container implements enterprise container security best pr
 
 > [!IMPORTANT]
 > **Historical Credential Notice**:
-> In early development revisions (specifically ancestor commit `463affdfe750148aebfc098b70d17a7ebd759f20`), a development placeholder key (`sk_live_dev_test_key_master_12345`) was committed in configuration templates.
-> - **Operational Status:** This key was strictly a local development placeholder and was **never** connected to or valid on any external production system.
-> - **Eradication:** The credential has been completely purged from all active tracked repository files (`.env.example`, `docker-compose.yml`, `frontend/app.js`, `frontend/index.html`, `README.md`, `tests/conftest.py`).
-> - **Fail-Closed Block:** The key is permanently blacklisted in `backend/config.py` (`DISALLOWED_PRODUCTION_BOOTSTRAP_KEYS`), preventing any service instance from bootstrapping with this value.
-> - **Git History Notice:** To maintain downstream Git clone integrity and preserve immutable commit SHAs on `main` without destructive force-pushes, historical commits are preserved under Option A. Full-history scanners (e.g. GitGuardian) will flag the historical ancestor commit, but active repository trees are 100% clean.
+> In early development revisions (specifically ancestor commit `463affdfe750148aebfc098b70d17a7ebd759f20`), a credential-shaped development placeholder was committed in configuration templates.
+> - **Operational Status:** This placeholder was strictly a local development template value and was **never** connected to or valid on any external production system.
+> - **Eradication:** The credential-shaped placeholder has been completely purged from all active tracked repository files (`.env.example`, `docker-compose.yml`, `frontend/app.js`, `frontend/index.html`, `README.md`, `tests/conftest.py`).
+> - **Fail-Closed Block:** The backend configuration in `backend/config.py` enforces fail-closed validation (`is_insecure_bootstrap_key()`), permanently blocking startup if development placeholders or template values are supplied when `ENV=production`.
+> - **Git History Notice:** To maintain downstream Git clone integrity and preserve immutable commit SHAs on `main` without destructive force-pushes, historical commits are preserved under Option A. Full-history scanners (e.g. GitGuardian) will flag the historical ancestor commit, but active repository trees contain zero active credentials or literal tokens.
 
 ---
 
