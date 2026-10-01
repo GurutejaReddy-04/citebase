@@ -144,7 +144,7 @@ cp .env.example .env
 | `AUTH_ENABLED` | `true` | Enforce API key authentication |
 | `DATABASE_URL` | `sqlite:///./data/app.db` | PostgreSQL URL for Docker/Prod or SQLite for local dev |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL for caching and rate limits |
-| `BOOTSTRAP_API_KEY` | `sk_live_replace_with_your_own_master_key` | Initial bootstrap master API key (required in production) |
+| `BOOTSTRAP_API_KEY` | `your_bootstrap_api_key_here` | Initial bootstrap master API key (required in production) |
 | `DEFAULT_RATE_LIMIT_RPM` | `60` | Default request quota per minute per key |
 | `GEMINI_API_KEY` | — | Google Gemini API key (**Required for generation**) |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Generative model ID |

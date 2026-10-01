@@ -71,7 +71,7 @@ jobs:
           import os, sys
           sys.path.insert(0, 'backend')
           os.environ['ENV'] = 'production'
-          os.environ['BOOTSTRAP_API_KEY'] = 'sk_live_replace_with_your_own_master_key'
+          os.environ['BOOTSTRAP_API_KEY'] = 'your_bootstrap_api_key_here'
           try:
               import config
               print('FAILED: Should have thrown EnvironmentError!')

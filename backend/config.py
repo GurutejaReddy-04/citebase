@@ -60,7 +60,8 @@ if not GEMINI_API_KEY:
     raise EnvironmentError("GEMINI_API_KEY is not set. Check your .env file.")
 
 DISALLOWED_PRODUCTION_BOOTSTRAP_KEYS = {
-    "sk_live_replace_with_your_own_master_key",
+    "your_bootstrap_api_key_here",
+    "your_api_key_here",
     "your_bootstrap_master_api_key_here",
 }
 
