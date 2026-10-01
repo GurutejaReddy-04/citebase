@@ -3,7 +3,7 @@ PyTest Fixtures and Test Environment Setup for Multi-Tenant RAG API.
 
 Provides:
 - Initialized SQLite test database with default tenant and API key.
-- Authenticated TestClient providing default 'X-API-Key: sk_live_dev_test_key_master_12345'.
+- Authenticated TestClient providing default test key headers.
 - Mocked LLM answer generator for deterministic, quota-free API testing.
 """
 
@@ -20,10 +20,12 @@ from config import BOOTSTRAP_API_KEY
 from database import SessionLocal, init_db
 from models import ApiKey, Tenant
 
+TEST_API_KEY = BOOTSTRAP_API_KEY or "sk_test_fixture_master_key_internal_only"
+
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_database():
-    """Ensure database schema is created and seeded with default master API key."""
+    """Ensure database schema is created and seeded with default test API key."""
     init_db()
     db = SessionLocal()
     try:
@@ -34,14 +36,14 @@ def setup_test_database():
             db.flush()
 
         import hashlib
-        key_hash = hashlib.sha256(BOOTSTRAP_API_KEY.encode("utf-8")).hexdigest()
+        key_hash = hashlib.sha256(TEST_API_KEY.encode("utf-8")).hexdigest()
         api_key = db.query(ApiKey).filter(ApiKey.key_hash == key_hash).first()
         if not api_key:
             api_key = ApiKey(
                 id="default_key_id",
                 tenant_id=tenant.id,
                 key_hash=key_hash,
-                key_prefix=BOOTSTRAP_API_KEY[:12],
+                key_prefix=TEST_API_KEY[:12],
                 name="Default Test Key",
                 rate_limit_rpm=1000,  # high limit for test suite
                 is_active=True,
@@ -137,7 +139,7 @@ def clear_test_cache():
 @pytest.fixture
 def auth_headers():
     """Return default authentication headers for API requests."""
-    return {"X-API-Key": BOOTSTRAP_API_KEY}
+    return {"X-API-Key": TEST_API_KEY}
 
 
 @pytest.fixture

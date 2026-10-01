@@ -3,7 +3,7 @@
 **Generated:** 2026-08-26 17:55:41  
 **Benchmark Set:** 25 Held-Out, Non-Contaminated Questions  
 **Evaluation Target:** Production RAG Document Intelligence API (Track 1)  
-**Environment:** Python 3.10 / PyTorch / CPU
+**Environment:** Python 3.10 / PyTorch / CPU (8 Cores, 16 Threads, 16 GB RAM)
 
 ---
 
@@ -17,9 +17,9 @@ Comparative evaluation of the complete retrieval stack on **25 fresh, un-used qu
 | **Hit Rate @ 3** | **80.0%** | **100.0%** | **+20.0%** |
 | **Hit Rate @ 5** | **80.0%** | **100.0%** | **+20.0%** |
 | **MRR (Mean Reciprocal Rank)** | **0.8** | **1.0** | **+0.2** |
-| **LLM-as-Judge Faithfulness** | **100.0%** | **88.0%** | **+-12.0%** |
-| **Citation Precision / Accuracy** | **100.0%** | **88.0%** | **Grounding Verified** |
-| **Out-of-Domain Fallback Accuracy** | **0.0%** | **100.0%** | **100.0%** |
+| **Lexical Context Support Rate (Heuristic)** | **100.0%** | **88.0%** | **-12.0%** |
+| **Citation Bracket Syntax Verification** | **100.0%** | **88.0%** | **Bracket Syntax Verified** |
+| **Out-of-Domain Fallback Trigger Rate** | **0.0%** | **100.0%** | **Trigger Validated** |
 
 ---
 
@@ -51,21 +51,32 @@ Comparative evaluation of the complete retrieval stack on **25 fresh, un-used qu
 
 ---
 
-## 4. Evaluation Methodology
+## 4. Evaluation Methodology & Scientific Context
 
 1. **Held-Out Benchmark Set:** 25 newly curated test questions spanning subjects and pages (12 to 189) that were strictly never referenced during development or tuning.
-2. **Ground Truth Validation:** Every query maps to explicit target pages and verified course strings.
-3. **LLM-as-Judge Faithfulness Verification:** Every generated answer is evaluated against the provided context chunks to verify that no unsupported or hallucinated statements are generated.
-4. **Two-Stage Thresholding:**
-   - `MIN_RELEVANCE_SCORE = 0.20`: Drops low-confidence distractor chunks to prevent false citations.
-   - `WEB_SEARCH_FALLBACK_THRESHOLD = 0.35`: Triggers web fallback when best local candidate score is < 0.35 or 0 chunks match.
-   - **Unified Cross-Encoder Blending:** Re-ranks local and web candidate passages jointly on an identical calibrated logit scale.
+   - **Query Taxonomy:**
+     - 18 In-Domain Curriculum Queries: Direct academic subject queries mapping to single/multi-page target passages (`fresh_course_syllabus`, `fresh_sports_nutrition`, `fresh_circuit_theory`, etc.).
+     - 2 Cross-Collection Boundary Queries: Comparative queries requiring multi-collection cross-attention (`fresh_cross_collection`, `fresh_middle_band`).
+     - 5 Out-of-Domain Queries: Unseen technologies (Rust 2024, Kafka, eBPF, Raft, PostgreSQL MVCC) explicitly selected to test fallback routing.
+2. **Ground Truth Validation:** Every query maps to explicit target pages and verified course strings, manually curated across 205 pages of academic curricula.
+3. **Automated Lexical Context Heuristic vs. Full LLM Judge:**
+   - The reported **Lexical Context Support Rate** measures sentence-level word token overlap ($\ge 40\%$) against retrieved context chunks.
+   - The **Citation Bracket Syntax** metric verifies presence of bracketed numerical citations (e.g. `[1]`, `[2]`).
+   - *Methodological Note:* This heuristic provides fast, continuous evaluation in test harnesses. It does not replace full semantic entailment or human judgment.
+4. **Out-of-Domain Metric Scope:**
+   - The reported **Fallback Trigger Rate (100%)** verifies that low-confidence queries successfully trip the `WEB_SEARCH_FALLBACK_THRESHOLD = 0.35` ceiling. It validates routing behavior, not semantic accuracy of external web results.
+5. **Hardware & Execution Environment:**
+   - Benchmarked on PyTorch CPU runtime (8 physical cores / 16 threads, 16 GB RAM), batch size = 1.
+   - The evaluation reflects a single comparative pass; run-to-run latency variance depends on host background load.
+6. **Statistical Confidence Limits ($N=25$):**
+   - For a sample size of $N=25$ queries, an observed 100% retrieval hit rate yields a 95% Wilson score confidence interval of **[86.7%, 100.0%]**.
+   - Perfect retrieval scores reflect calibrated alignment on the evaluated academic syllabus domain rather than universal search infallibility.
 
 ---
 
 ## 5. Full Held-Out Benchmark Dataset & Query Breakdown
 
-| ID | Query Type | Question | Mode | Hit@1 | MRR | Faithfulness | Latency |
+| ID | Query Type | Question | Mode | Hit@1 | MRR | Lexical Support | Latency |
 | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
 | `q01` | `fresh_course_syllabus` | What are the prerequisites and syllabus topics for Differential Calculus MA101? | `local_document` | ✅ | `1.00` | ✅ `1.00` | `3121.3ms` |
 | `q02` | `fresh_sports_nutrition` | What is covered in the Nutrition and First Aid Injury Management curriculum? | `local_document` | ✅ | `1.00` | ✅ `1.00` | `678.5ms` |
@@ -102,5 +113,5 @@ Comparative evaluation of the complete retrieval stack on **25 fresh, un-used qu
 - **Hybrid Retrieval:** Dense vectors + BM25 sparse search with Reciprocal Rank Fusion ($k=60$).
 - **Cross-Encoder Reranking:** Promotes ground-truth passages while filtering out irrelevant distractors.
 - **Multi-Document Synthesis:** Supports multi-collection queries with per-document attribution.
-- **Web Search Fallback & Blending:** Unifies local and web snippets under joint cross-attention.
-- **LLM-as-Judge Grounding:** Faithfulness and citation grounding verified across all benchmark cases.
+- **Web Search Fallback Routing:** Validates automatic transition to live search when document confidence is low.
+- **Context-Constrained Lexical Verification:** Assesses lexical support and citation syntax across benchmark queries.

@@ -6,7 +6,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.112.0-teal.svg)](https://fastapi.tiangolo.com/)
 [![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED.svg)](https://www.docker.com/)
 
-CiteBase is a production-ready, multi-tenant RAG-as-a-Service API and document intelligence engine. It delivers factual, document-grounded answers with exact page-level citations, cross-encoder relevance reranking, automated web search fallback, asynchronous ingestion, and tenant-isolated cryptographic caching.
+CiteBase is a production-grade, multi-tenant RAG-as-a-Service API and document intelligence engine. It constrains generative synthesis to retrieved document context, delivering verifiable answers with exact page-level citations, cross-encoder relevance reranking, automated web search fallback routing, asynchronous ingestion, and tenant-isolated cryptographic caching.
 
 ---
 
@@ -24,7 +24,7 @@ This site provides a quick overview of the project, links to the API documentati
 - **Multi-tenant isolation with cryptographic API keys:** Cryptographically verified SHA-256 API keys with strict namespace-isolated vector collections and relational record boundaries.
 - **Hybrid search (dense vector + BM25) fused via RRF:** Fuses ChromaDB dense semantic vector search (`all-MiniLM-L6-v2`) with BM25Okapi sparse keyword retrieval via Reciprocal Rank Fusion (RRF, $k=60$).
 - **Cross-encoder reranking for precision citations:** Re-scores candidate passages with `cross-encoder/ms-marco-MiniLM-L-6-v2` for high-precision citation attribution and distractor filtering ($MIN\_RELEVANCE\_SCORE = 0.20$).
-- **Redis caching with tenant-scoped TTL (353x speedup):** Deterministic SHA-256 tenant-partitioned caching bypassing vector search and LLM generation on cache hits (**20.9x speedup** on local docs, **349.2x** on web queries).
+- **Redis caching with tenant-scoped TTL (up to 349.2x speedup):** Deterministic SHA-256 tenant-partitioned caching bypassing vector search and LLM generation on cache hits (**13.7x speedup** in local offline benchmark with 150ms mock generation; **20.9x–349.2x speedup** under live cloud LLM latency with Gemini API and web fallback). Experimentally verifiable via `scripts/benchmark_cache.py`.
 - **Async PDF ingestion with task polling:** Non-blocking PDF parsing, chunking, and indexing via FastAPI `BackgroundTasks` returning immediate HTTP 202 Accepted status with task polling and staleness detection.
 - **Web search fallback (DuckDuckGo/Tavily):** Transparently queries DuckDuckGo or Tavily when document confidence drops below threshold ($0.35$), with unified cross-encoder joint reranking for middle-band queries.
 - **Docker Compose orchestration (API + PostgreSQL + Redis):** Production three-tier architecture with automated container healthchecks, non-root security (`appuser`), and CPU-optimized PyTorch.
@@ -43,7 +43,7 @@ This site provides a quick overview of the project, links to the API documentati
 | **Sparse Search** | rank-bm25 0.2.2 | In-memory and disk-persisted BM25Okapi keyword indexing |
 | **Embeddings** | HuggingFace `all-MiniLM-L6-v2` | Fast 384-dimensional dense semantic embeddings |
 | **Reranker** | Cross-Encoder `ms-marco-MiniLM-L-6-v2` | Full cross-attention query-document passage reranking |
-| **LLM Engine** | Google Gemini API (Configurable via `GEMINI_MODEL`, `google-genai` SDK) | Grounded generative synthesis with strict citation formatting |
+| **LLM Engine** | Google Gemini API (Configurable via `GEMINI_MODEL`, `google-genai` SDK) | Context-constrained generative synthesis with strict citation formatting and fallback refusal |
 | **Cache & Rate Limit** | Redis 7-Alpine / FakeRedis | Low-latency response caching and minute-bucket rate limiting |
 | **Web Fallback** | DuckDuckGo (`ddgs`) / Tavily REST API | Live web search augmentation for out-of-domain questions |
 | **PDF Extraction** | PyMuPDF (`fitz`) | Structure-aware header detection, breadcrumbs, and noise filtering |
@@ -61,7 +61,7 @@ CiteBase is architected as a B2B multi-tenant developer platform, not a consumer
 - **Cryptographic Key Resolution:** Authentication is cryptographically tied to a Tenant ID via SHA-256 key hashing. Raw API keys are never stored; incoming requests are validated against stored hashes to extract the corresponding tenant context.
 - **Tenant-Scoped Storage:** Document records, ingestion task queues, vector embeddings in ChromaDB (`t_{tenant_id}_{collection}`), and sparse BM25 inverted indices are partitioned by tenant namespace. Tenants cannot access or discover assets belonging to other organizations.
 - **Developer Playground Interface:** The frontend API key input serves as a tenant-switching mechanism for development, QA, and evaluation purposes—analogous to the API key playgrounds provided by Stripe, Pinecone, and OpenAI. It allows evaluators to simulate distinct client tenants and verify strict data isolation without issuing manual terminal commands.
-- **Production Deployment Model:** In a production consumer deployment, this client-side input is replaced by OAuth2 or SSO authentication, with the API gateway or backend resolving tenant identity directly from the authenticated session context.
+- **Production Deployment Model:** In a production consumer deployment, this client-side input is replaced by OAuth2 or SSO authentication, with the API gateway or backend resolving tenant identity directly from the authenticated session context. See [SECURITY.md](SECURITY.md) for detailed architectural threat models and isolation guarantees.
 
 ### Metadata Filtering & Layout Preservation
 
@@ -74,7 +74,7 @@ CiteBase supports optional metadata attribution and partition filtering during i
 
 ## Evaluation & Benchmark Results
 
-Evaluated on a held-out, non-contaminated benchmark dataset of 25 structured queries across 205 corpus pages (see [`EVALUATION_REPORT.md`](EVALUATION_REPORT.md)):
+Evaluated on a held-out, non-contaminated benchmark dataset of 25 structured queries across 205 corpus pages (see [`EVALUATION_REPORT.md`](EVALUATION_REPORT.md) and [`scripts/benchmark_cache.py`](scripts/benchmark_cache.py)):
 
 | Metric | Hybrid RRF Only (Reranker OFF) | Two-Stage Cross-Encoder (Reranker ON) | Impact |
 |---|:---:|:---:|:---:|
@@ -82,7 +82,7 @@ Evaluated on a held-out, non-contaminated benchmark dataset of 25 structured que
 | **Hit Rate @ 3** | 80.0% | **100.0%** | **+20.0%** |
 | **Hit Rate @ 5** | 80.0% | **100.0%** | **+20.0%** |
 | **MRR (Mean Reciprocal Rank)** | 0.8000 | **1.0000** | **+0.2000** |
-| **Out-of-Domain Fallback Accuracy** | 0.0% | **100.0%** | **+100.0%** |
+| **Out-of-Domain Fallback Trigger Rate** | 0.0% | **100.0%** | **Trigger Validated** |
 | **Median P50 Cache Hit Latency** | — | **18.84 ms** (Local) / **24.73 ms** (Web) | **20.9x–349.2x Speedup** |
 
 ---
@@ -144,7 +144,7 @@ cp .env.example .env
 | `AUTH_ENABLED` | `true` | Enforce API key authentication |
 | `DATABASE_URL` | `sqlite:///./data/app.db` | PostgreSQL URL for Docker/Prod or SQLite for local dev |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL for caching and rate limits |
-| `BOOTSTRAP_API_KEY` | `sk_live_dev_test_key_master_12345` | Default development master API key |
+| `BOOTSTRAP_API_KEY` | `sk_live_replace_with_your_own_master_key` | Initial bootstrap master API key (required in production) |
 | `DEFAULT_RATE_LIMIT_RPM` | `60` | Default request quota per minute per key |
 | `GEMINI_API_KEY` | — | Google Gemini API key (**Required for generation**) |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Generative model ID |

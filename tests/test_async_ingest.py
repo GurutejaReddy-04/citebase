@@ -24,7 +24,6 @@ sys.path.insert(0, os.path.abspath("backend"))
 
 import main
 from auth import generate_api_key
-from config import BOOTSTRAP_API_KEY
 from database import SessionLocal
 from main import app
 from models import ApiKey, IngestionTask, Tenant, generate_uuid, get_utc_now

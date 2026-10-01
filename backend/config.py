@@ -58,3 +58,16 @@ ALLOWED_ORIGINS = [
 
 if not GEMINI_API_KEY:
     raise EnvironmentError("GEMINI_API_KEY is not set. Check your .env file.")
+
+DISALLOWED_PRODUCTION_BOOTSTRAP_KEYS = {
+    "sk_live_dev_test_key_master_12345",
+    "sk_live_replace_with_your_own_master_key",
+    "your_bootstrap_master_api_key_here",
+}
+
+if ENV == "production":
+    if not BOOTSTRAP_API_KEY or BOOTSTRAP_API_KEY.strip() in DISALLOWED_PRODUCTION_BOOTSTRAP_KEYS:
+        raise EnvironmentError(
+            "FATAL: When ENV=production, BOOTSTRAP_API_KEY must be explicitly configured with a secure, "
+            "high-entropy key in your environment. Insecure default keys and template placeholders are disallowed."
+        )

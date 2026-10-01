@@ -23,6 +23,22 @@ h1 {
 .subtitle {
   color: #64748b;
   margin-bottom: 2rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.playground-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #0369a1;
+  background: #e0f2fe;
+  border: 1px solid #bae6fd;
+  border-radius: 9999px;
+  padding: 0.15rem 0.6rem;
+  vertical-align: middle;
 }
 
 /* Layout */
