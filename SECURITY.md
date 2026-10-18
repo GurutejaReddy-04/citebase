@@ -150,7 +150,33 @@ All Redis response cache keys are strictly namespaced by tenant ID and include a
 `rag_cache:{tenant_id}:{query_sha256}`
 The cache key hashes the normalized question, target collections, metadata filters, reranker state, web-fallback toggle, and web search provider. Even if Tenant A and Tenant B ask the exact same question against their own collections, Tenant B will **never** receive Tenant A's cached response.
 
-### 4.5 Background Ingestion & Durability Boundary (Documented Architectural Limitation)
+### 4.5 Unified Resource Ownership Architecture & Strict Fail-Closed Resolution Contract
+To eliminate ad-hoc, route-specific tenant checks and provide a single authoritative boundary across all endpoints (`/upload`, `/query`, `GET /collections`, `DELETE /collections/{name}`, `POST /reset`), CiteBase implements a unified ownership resolver (`backend/ownership.py`):
+
+1. **Tri-State Ownership Model (`ResourceOwnership`):**
+   Every vector collection, sparse index sidecar, and logical collection name evaluates strictly to one of three states:
+   - `ResourceOwnership.OWNED`: Positively and authoritatively proven to belong to the authenticated calling tenant.
+   - `ResourceOwnership.FOREIGN`: Positively proven to belong to a distinct, different tenant.
+   - `ResourceOwnership.UNKNOWN`: Ownership cannot be positively established -> **Strict Fail-Closed** (access denied, queries return 0 results, deletions reject with HTTP 404).
+
+2. **Strict Fail-Closed Resolution Invariant:**
+   *Absence of evidence of another tenant's ownership is NEVER treated as evidence of the caller's ownership.*
+   - If a physical ChromaDB collection or on-disk BM25 index lacks explicit `tenant_id` metadata (legacy unannotated resource), the caller **must have positive proof** in relational database records (`DocumentRecord`).
+   - If the caller lacks positive database records, ownership evaluates to `UNKNOWN` and the resource is protected from discovery, modification, or deletion.
+   - Prefix matching alone NEVER establishes ownership.
+
+3. **Strict Ban on Pickle Deserialization (Zero-RCE Invariant):**
+   To permanently prevent arbitrary code execution vulnerabilities, `pickle.load()` and `pickle.loads()` are **strictly prohibited** across all ownership inspection helpers and API routes.
+   - Ingestion persists sparse keyword indices as atomic JSON files (`{scoped_name}_bm25.json`) with root-level `tenant_id` metadata.
+   - Legacy `.pkl` files on disk are **never deserialized** to inspect metadata. Ownership of `.pkl` files is verified purely through relational records (`DocumentRecord`) or cryptographic namespace identity for modern tenants.
+   - Collection deletion and tenant reset remove `.pkl` files safely via filesystem unlinking (`os.remove`) without executing or loading any untrusted data.
+
+4. **Fail-Closed Tenant Reset Contract (`POST /reset`):**
+   - The `/reset` endpoint inspects every ChromaDB collection and BM25 index file against `resolve_chroma_collection_ownership` and `resolve_bm25_file_ownership`.
+   - Collections or files evaluating to `UNKNOWN` or `FOREIGN` are strictly skipped, preventing accidental or adversarial deletion of foreign or unannotated collections.
+   - If physical deletion of any Chroma collection or BM25 index fails (e.g., storage I/O error or permission failure), relational database records are preserved intact and an HTTP 500 error is returned, guaranteeing zero silent data loss.
+
+### 4.6 Background Ingestion & Durability Boundary (Documented Architectural Limitation)
 > [!NOTE]
 > **Architectural Status — Durability Not Implemented (Documented Limitation)**:
 > Ingestion tasks execute asynchronously in-process via FastAPI `BackgroundTasks`. While relational task metadata and active worker heartbeats (`updated_at`) are maintained in PostgreSQL, in-flight task execution is not durable across host reboots, process crashes, or container terminations.

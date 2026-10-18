@@ -85,6 +85,14 @@ from retriever import retrieve_context
 from tasks import run_background_ingest
 from web_search import search_web
 from bm25 import delete_bm25_index, get_bm25_file_tenant_id
+from ownership import (
+    ResourceOwnership,
+    get_tenant_candidate_physical_names,
+    is_physical_name_claimed_by_other_tenant,
+    resolve_chroma_collection_ownership,
+    resolve_bm25_file_ownership,
+    resolve_owned_collection,
+)
 
 # --- logging ---
 logging.basicConfig(
@@ -300,27 +308,18 @@ def upload_document(
     chroma_client = get_chroma_client()
     existing_chroma_colls = {c.name: c for c in chroma_client.list_collections()}
     if scoped_coll in existing_chroma_colls:
-        coll_meta = existing_chroma_colls[scoped_coll].metadata or {}
-        owner_tenant = coll_meta.get("tenant_id")
-        if owner_tenant and owner_tenant != tenant.tenant_id:
+        ownership = resolve_chroma_collection_ownership(
+            phys_coll_name=scoped_coll,
+            tenant=tenant,
+            db=db,
+            existing_coll=existing_chroma_colls[scoped_coll],
+            candidate_logicals={raw_coll},
+        )
+        if ownership == ResourceOwnership.FOREIGN:
             raise HTTPException(
                 status_code=409,
                 detail=f"Cross-tenant collection collision: physical collection for '{raw_coll}' is already owned by another tenant.",
             )
-
-    other_tenant_has_docs = (
-        db.query(DocumentRecord)
-        .filter(
-            DocumentRecord.tenant_id != tenant.tenant_id,
-            DocumentRecord.collection_name == raw_coll,
-        )
-        .first()
-    )
-    if other_tenant_has_docs and scoped_coll in existing_chroma_colls:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cross-tenant collection collision: physical collection for '{raw_coll}' is already owned by another tenant.",
-        )
 
     safe_name = secure_filename(file.filename or "unnamed.pdf")
     if not safe_name:
@@ -673,63 +672,29 @@ def query_document(
         # Strict isolation: tenants only access their own collections.
         # Collections owned by another tenant (checked via ChromaDB metadata or relational documents)
         # cannot be accessed even if an engineered or colliding namespace is targeted.
+        # 1. Resolve scoped internal collection names for the tenant
+        # Unified Fail-Closed Resolver: only collections positively OWNED by the tenant are queried.
         chroma_client = get_chroma_client()
         existing_colls = {c.name: c for c in chroma_client.list_collections()}
 
-        def is_collection_accessible_to_tenant(phys_coll: str, logical_name: str) -> bool:
-            if phys_coll not in existing_colls:
-                return False
-            coll_meta = existing_colls[phys_coll].metadata or {}
-            owner_tenant = coll_meta.get("tenant_id")
-            if owner_tenant:
-                return owner_tenant == tenant.tenant_id
-            # Fail closed: check for foreign tenant documents first.
-            # If another tenant has documents under this logical collection name, access must be
-            # denied immediately to prevent cross-tenant chunk leakage from shared collections lacking metadata.
-            has_other_docs = (
-                db.query(DocumentRecord)
-                .filter(
-                    DocumentRecord.tenant_id != tenant.tenant_id,
-                    DocumentRecord.collection_name == logical_name,
-                )
-                .first()
-                is not None
-            )
-            if has_other_docs:
-                return False
-            has_own_docs = (
-                db.query(DocumentRecord)
-                .filter(
-                    DocumentRecord.tenant_id == tenant.tenant_id,
-                    DocumentRecord.collection_name == logical_name,
-                )
-                .first()
-                is not None
-            )
-            if has_own_docs:
-                return True
-            if tenant.is_legacy_tenant:
-                return phys_coll.startswith(f"t_{tenant.tenant_id[:12]}_")
-            return phys_coll.startswith(f"t_{tenant.normalized_tid}_")
-
         scoped_collections = []
         for coll_target in target_collections:
-            scoped_c = tenant.get_scoped_collection_name(coll_target)
-            legacy_c = tenant.get_legacy_scoped_collection_name(coll_target)
-            pre_mig_c = tenant.get_pre_migration_scoped_collection_name(coll_target)
-            if is_collection_accessible_to_tenant(scoped_c, coll_target):
-                scoped_collections.append(scoped_c)
-            elif legacy_c and is_collection_accessible_to_tenant(legacy_c, coll_target):
-                scoped_collections.append(legacy_c)
-            elif pre_mig_c and is_collection_accessible_to_tenant(pre_mig_c, coll_target):
-                scoped_collections.append(pre_mig_c)
-            elif (
-                tenant.tenant_id in ("default_tenant_id", "default_tena")
-                and coll_target in existing_colls
-                and not coll_target.startswith("t_")
-                and not coll_target.startswith("tenant_")
-            ):
-                scoped_collections.append(coll_target)
+            phys, ownership = resolve_owned_collection(
+                logical_name=coll_target,
+                tenant=tenant,
+                db=db,
+                chroma_client=chroma_client,
+                existing_colls=existing_colls,
+            )
+            if ownership == ResourceOwnership.OWNED and phys:
+                scoped_collections.append(phys)
+            else:
+                logger.info(
+                    "Collection '%s' not accessible to tenant '%s' (ownership: %s)",
+                    coll_target,
+                    tenant.tenant_name,
+                    ownership,
+                )
 
         # 2. Local Retrieval across tenant-scoped collections
         local_context = retrieve_context(
@@ -811,13 +776,8 @@ def query_document(
         legacy_prefix = f"t_{tenant.tenant_id[:12]}_"
         scoped_to_target = {}
         for coll_target in target_collections:
-            scoped_to_target[tenant.get_scoped_collection_name(coll_target)] = coll_target
-            leg = tenant.get_legacy_scoped_collection_name(coll_target)
-            if leg:
-                scoped_to_target[leg] = coll_target
-            pre = tenant.get_pre_migration_scoped_collection_name(coll_target)
-            if pre:
-                scoped_to_target[pre] = coll_target
+            for cand in get_tenant_candidate_physical_names(tenant, coll_target):
+                scoped_to_target[cand] = coll_target
 
         formatted_sources = []
         for ctx_item in final_context:
@@ -889,13 +849,7 @@ def list_collections(
     """Return list of collections belonging strictly to the current tenant."""
     try:
         client = get_chroma_client()
-        full_prefix = f"t_{tenant.normalized_tid}_"
-        legacy_prefix = f"t_{tenant.tenant_id[:12]}_"
-        all_chroma_colls = client.list_collections()
-        all_colls = [
-            c.name for c in all_chroma_colls
-            if not ((c.metadata or {}).get("tenant_id") and (c.metadata or {}).get("tenant_id") != tenant.tenant_id)
-        ]
+        existing_colls = {c.name: c for c in client.list_collections()}
 
         # Relational records store original logical client names (including names 29-45 chars)
         db_docs = (
@@ -906,6 +860,23 @@ def list_collections(
         )
         known_logical_names = {r[0] for r in db_docs if r[0]}
 
+        tenant_colls: set[str] = set()
+
+        # 1. Evaluate known logical names via unified ownership resolver
+        for l_name in known_logical_names:
+            phys, ownership = resolve_owned_collection(
+                logical_name=l_name,
+                tenant=tenant,
+                db=db,
+                chroma_client=client,
+                existing_colls=existing_colls,
+            )
+            if ownership == ResourceOwnership.OWNED:
+                tenant_colls.add(l_name)
+
+        # 2. Inspect physical collections in ChromaDB with explicit caller metadata
+        full_prefix = f"t_{tenant.normalized_tid}_"
+        legacy_prefix = f"t_{tenant.tenant_id[:12]}_"
         pre_mig_prefix = None
         if len(tenant.tenant_id) > 32:
             old_tid = (
@@ -915,46 +886,27 @@ def list_collections(
             )
             pre_mig_prefix = f"t_{old_tid}_"
 
-        tenant_colls: set[str] = set()
+        for c_name, coll in existing_colls.items():
+            coll_meta = coll.metadata or {}
+            is_caller = coll_meta.get("tenant_id") == tenant.tenant_id
+            if not is_caller and tenant.tenant_id in ("default_tenant_id", "default_tena") and coll_meta.get("tenant_id") is None:
+                is_caller = not is_physical_name_claimed_by_other_tenant(c_name, tenant, db)
 
-        for l_name in known_logical_names:
-            scoped_c = tenant.get_scoped_collection_name(l_name)
-            legacy_c = tenant.get_legacy_scoped_collection_name(l_name)
-            pre_mig_c = tenant.get_pre_migration_scoped_collection_name(l_name)
-            if (
-                scoped_c in all_colls
-                or (legacy_c and legacy_c in all_colls)
-                or (pre_mig_c and pre_mig_c in all_colls)
-            ):
-                tenant_colls.add(l_name)
-
-        for c in all_colls:
-            if c.startswith(full_prefix):
-                tail = c[len(full_prefix):]
-                # If this tail doesn't correspond to a known long name, add directly (skipping internal dotted hashes)
-                if not any(tenant.get_scoped_collection_name(l) == c for l in known_logical_names):
-                    if "." not in tail:
+            if is_caller:
+                if c_name.startswith(full_prefix):
+                    tail = c_name[len(full_prefix):]
+                    if "." not in tail and tail not in tenant_colls:
                         tenant_colls.add(tail)
-            elif (
-                tenant.is_legacy_tenant
-                and c.startswith(legacy_prefix)
-            ):
-                tail = c[len(legacy_prefix):]
-                tenant_colls.add(tail)
-            elif (
-                pre_mig_prefix
-                and c.startswith(pre_mig_prefix)
-            ):
-                tail = c[len(pre_mig_prefix):]
-                if not any(tenant.get_pre_migration_scoped_collection_name(l) == c for l in known_logical_names):
-                    if "." not in tail:
+                elif tenant.is_legacy_tenant and c_name.startswith(legacy_prefix):
+                    tail = c_name[len(legacy_prefix):]
+                    if tail not in tenant_colls:
                         tenant_colls.add(tail)
-            elif (
-                tenant.tenant_id in ("default_tenant_id", "default_tena")
-                and not c.startswith("t_")
-                and not c.startswith("tenant_")
-            ):
-                tenant_colls.add(c)
+                elif pre_mig_prefix and c_name.startswith(pre_mig_prefix):
+                    tail = c_name[len(pre_mig_prefix):]
+                    if "." not in tail and tail not in tenant_colls:
+                        tenant_colls.add(tail)
+                elif tenant.tenant_id in ("default_tenant_id", "default_tena") and not c_name.startswith("t_"):
+                    tenant_colls.add(c_name)
 
         return {"collections": sorted(list(tenant_colls)), "tenant": tenant.tenant_name}
     except Exception as e:
@@ -970,120 +922,47 @@ def delete_collection(
 ) -> dict[str, str]:
     """Delete the collection belonging to the authenticated tenant."""
     _validate_collection_name(collection_name)
-    scoped_coll = tenant.get_scoped_collection_name(collection_name)
-    legacy_coll = tenant.get_legacy_scoped_collection_name(collection_name)
-    pre_mig_coll = tenant.get_pre_migration_scoped_collection_name(collection_name)
     try:
         client = get_chroma_client()
         existing_colls = {c.name: c for c in client.list_collections()}
-        target_coll = None
-        if scoped_coll in existing_colls:
-            target_coll = scoped_coll
-        elif legacy_coll and legacy_coll in existing_colls:
-            target_coll = legacy_coll
-        elif pre_mig_coll and pre_mig_coll in existing_colls:
-            target_coll = pre_mig_coll
 
-        # Check if any BM25 index file (.json or legacy .pkl) exists on disk
-        bm25_candidates = [scoped_coll]
-        if legacy_coll:
-            bm25_candidates.append(legacy_coll)
-        if pre_mig_coll:
-            bm25_candidates.append(pre_mig_coll)
-
-        existing_bm25_colls = [
-            c for c in bm25_candidates
-            if any(
-                os.path.exists(os.path.join(CHROMA_PATH, f"{c}_bm25{ext}"))
-                for ext in (".json", ".pkl")
-            )
-        ]
-        bm25_exists = len(existing_bm25_colls) > 0
-
-        doc_count = (
-            db.query(DocumentRecord)
-            .filter(
-                DocumentRecord.tenant_id == tenant.tenant_id,
-                DocumentRecord.collection_name == collection_name,
-            )
-            .count()
+        phys, ownership = resolve_owned_collection(
+            logical_name=collection_name,
+            tenant=tenant,
+            db=db,
+            chroma_client=client,
+            existing_colls=existing_colls,
         )
 
-        # Cross-tenant ownership verification:
-        # If target_coll exists, verify it belongs to calling tenant, not another tenant
-        if target_coll:
-            coll_meta = existing_colls[target_coll].metadata or {}
-            owner_tenant = coll_meta.get("tenant_id")
-            if owner_tenant and owner_tenant != tenant.tenant_id:
-                # Target collection belongs to a different tenant!
-                raise CollectionNotFoundError(collection_name)
-            if doc_count == 0:
-                # Calling tenant has no documents; check if another tenant owns documents here
-                other_tenant_has_docs = (
-                    db.query(DocumentRecord)
-                    .filter(
-                        DocumentRecord.tenant_id != tenant.tenant_id,
-                        DocumentRecord.collection_name == collection_name,
-                    )
-                    .first()
-                    is not None
-                )
-                if other_tenant_has_docs:
-                    raise CollectionNotFoundError(collection_name)
-
-        # Orphaned BM25 file verification (when target_coll does not exist):
-        # Prevent cross-tenant sidecar deletion and unverified deletion
-        if not target_coll and bm25_exists:
-            for c in existing_bm25_colls:
-                file_tid = get_bm25_file_tenant_id(c)
-                # If persistent sidecar indicates an explicit foreign owner, reject
-                if file_tid and file_tid != tenant.tenant_id:
-                    raise CollectionNotFoundError(collection_name)
-                # If calling tenant has no relational documents and sidecar does not verify ownership, reject
-                if doc_count == 0 and file_tid != tenant.tenant_id:
-                    raise CollectionNotFoundError(collection_name)
-
-            if doc_count == 0:
-                other_tenant_has_docs = (
-                    db.query(DocumentRecord)
-                    .filter(
-                        DocumentRecord.tenant_id != tenant.tenant_id,
-                        DocumentRecord.collection_name == collection_name,
-                    )
-                    .first()
-                    is not None
-                )
-                if other_tenant_has_docs:
-                    raise CollectionNotFoundError(collection_name)
-
-        if not target_coll and not bm25_exists and doc_count == 0:
+        # Fail closed: UNKNOWN or FOREIGN means DENY!
+        if ownership != ResourceOwnership.OWNED or not phys:
             raise CollectionNotFoundError(collection_name)
 
-        if target_coll:
+        # 1. Delete Chroma collection if physically present
+        if phys in existing_colls:
             try:
-                client.delete_collection(target_coll)
+                client.delete_collection(phys)
             except ValueError as ve:
                 err_text = str(ve).lower()
-                # ChromaDB raises ValueError("Collection <name> does not exist.") when collection is absent.
-                # Only treat as already removed if specifically matching this condition; propagate any other ValueError.
                 if "does not exist" in err_text:
-                    logger.info("ChromaDB collection '%s' already removed: %s", target_coll, ve)
+                    logger.info("ChromaDB collection '%s' already removed: %s", phys, ve)
                 else:
-                    logger.exception("ChromaDB delete_collection raised unexpected ValueError for '%s': %s", target_coll, ve)
+                    logger.exception("ChromaDB delete_collection raised unexpected ValueError for '%s': %s", phys, ve)
                     raise HTTPException(
                         status_code=500,
                         detail=f"Failed to delete underlying vector collection '{collection_name}': {ve}. Relational records were preserved.",
                     ) from ve
             except Exception as e:
-                logger.exception("Failed to delete physical vector collection '%s': %s", target_coll, e)
+                logger.exception("Failed to delete physical vector collection '%s': %s", phys, e)
                 raise HTTPException(
                     status_code=500,
                     detail=f"Failed to delete underlying vector collection '{collection_name}'. Relational records were preserved.",
                 ) from e
 
-        # Delete BM25 sparse index on disk (must propagate failure to prevent retaining plain chunks)
+        # 2. Delete BM25 sparse index on disk (candidates scoped to caller)
+        candidates = get_tenant_candidate_physical_names(tenant, collection_name)
         try:
-            for c in bm25_candidates:
+            for c in candidates:
                 delete_bm25_index(c)
         except Exception as e:
             logger.exception("Failed to delete BM25 index file for collection '%s': %s", collection_name, e)
@@ -1092,7 +971,7 @@ def delete_collection(
                 detail=f"Incomplete collection deletion: failed to remove persistent BM25 index for '{collection_name}'. Relational records were preserved.",
             ) from e
 
-        # Clean records in Postgres/SQLite only after physical deletion succeeds
+        # 3. Clean records in Postgres/SQLite only after physical deletion succeeds
         db.query(DocumentRecord).filter(
             DocumentRecord.tenant_id == tenant.tenant_id,
             DocumentRecord.collection_name == collection_name,
@@ -1101,7 +980,7 @@ def delete_collection(
 
         invalidate_tenant_cache(tenant.tenant_id)
 
-        logger.info("Deleted collection '%s' (internal: '%s') for tenant '%s'", collection_name, target_coll, tenant.tenant_name)
+        logger.info("Deleted collection '%s' (internal: '%s') for tenant '%s'", collection_name, phys, tenant.tenant_name)
         return {"message": f"Collection '{collection_name}' deleted."}
     except CollectionNotFoundError:
         raise
@@ -1120,16 +999,7 @@ def reset_tenant_collections(
     """Wipe all collections belonging strictly to the calling tenant."""
     try:
         client = get_chroma_client()
-        full_prefix = f"t_{tenant.normalized_tid}_"
-        legacy_prefix = f"t_{tenant.tenant_id[:12]}_"
-        pre_mig_prefix = None
-        if len(tenant.tenant_id) > 32:
-            old_tid = (
-                tenant.tenant_id
-                if len(tenant.tenant_id) <= 36
-                else f"{tenant.tenant_id[:24]}{hashlib.sha256(tenant.tenant_id.encode('utf-8')).hexdigest()[:8]}"
-            )
-            pre_mig_prefix = f"t_{old_tid}_"
+        existing_colls = {c.name: c for c in client.list_collections()}
 
         # 1. Identify all logical collections owned by this tenant from DB records
         db_logical_records = (
@@ -1143,60 +1013,49 @@ def reset_tenant_collections(
         # Map physical collection names to corresponding tenant logical names
         phys_to_logicals: dict[str, set[str]] = {}
         for l_name in tenant_logical_names:
-            for cand in [
-                tenant.get_scoped_collection_name(l_name),
-                tenant.get_legacy_scoped_collection_name(l_name),
-                tenant.get_pre_migration_scoped_collection_name(l_name),
-            ]:
-                if cand:
-                    phys_to_logicals.setdefault(cand, set()).add(l_name)
+            for cand in get_tenant_candidate_physical_names(tenant, l_name):
+                phys_to_logicals.setdefault(cand, set()).add(l_name)
 
         # 2. Identify physical collections in ChromaDB belonging to this tenant
-        all_colls = client.list_collections()
-        target_colls: list[Any] = []
-        for coll in all_colls:
-            coll_meta = coll.metadata or {}
-            owner_tenant = coll_meta.get("tenant_id")
-            if owner_tenant:
-                if owner_tenant == tenant.tenant_id:
-                    target_colls.append(coll)
-                continue
-
-            # If coll_meta lacks tenant_id, verify prefix and check relational ownership
-            matches_prefix = coll.name.startswith(full_prefix) or (
-                tenant.is_legacy_tenant and coll.name.startswith(legacy_prefix)
-            ) or (
-                pre_mig_prefix and coll.name.startswith(pre_mig_prefix)
+        # Fail closed: ONLY include collections that evaluate to ResourceOwnership.OWNED
+        target_chroma_colls: list[str] = []
+        for c_name, coll in existing_colls.items():
+            candidate_logicals = phys_to_logicals.get(c_name, set())
+            ownership = resolve_chroma_collection_ownership(
+                phys_coll_name=c_name,
+                tenant=tenant,
+                db=db,
+                existing_coll=coll,
+                candidate_logicals=candidate_logicals,
             )
-            if not matches_prefix:
-                continue
+            if ownership == ResourceOwnership.OWNED:
+                target_chroma_colls.append(c_name)
 
-            # Fail-closed check: if another tenant has documents mapping to this physical collection or logical name, skip
-            candidate_logicals = phys_to_logicals.get(coll.name, set())
-            has_other_docs = False
-            for l_name in candidate_logicals:
-                if (
-                    db.query(DocumentRecord)
-                    .filter(
-                        DocumentRecord.tenant_id != tenant.tenant_id,
-                        DocumentRecord.collection_name == l_name,
-                    )
-                    .first()
-                    is not None
-                ):
-                    has_other_docs = True
-                    break
-            if has_other_docs:
-                continue
+        # 3. Identify BM25 index files on disk belonging to this tenant
+        # Fail closed: ONLY include candidate names where BM25 index evaluates to ResourceOwnership.OWNED
+        target_bm25_colls: set[str] = set()
+        for cand_name, l_names in phys_to_logicals.items():
+            json_p = os.path.join(CHROMA_PATH, f"{cand_name}_bm25.json")
+            pkl_p = os.path.join(CHROMA_PATH, f"{cand_name}_bm25.pkl")
+            if os.path.exists(json_p) or os.path.exists(pkl_p):
+                bm25_ownership = resolve_bm25_file_ownership(
+                    phys_coll_name=cand_name,
+                    tenant=tenant,
+                    db=db,
+                    candidate_logicals=l_names,
+                )
+                if bm25_ownership == ResourceOwnership.OWNED:
+                    target_bm25_colls.add(cand_name)
 
-            target_colls.append(coll)
+        # Also include verified target Chroma collections' BM25 indices
+        for p_name in target_chroma_colls:
+            target_bm25_colls.add(p_name)
 
         failed_physical: list[str] = []
         failed_logicals: set[str] = set()
 
-        # 3. Delete physical ChromaDB collections and their BM25 indexes
-        for coll in target_colls:
-            p_name = coll.name
+        # 4. Delete verified physical ChromaDB collections
+        for p_name in target_chroma_colls:
             try:
                 client.delete_collection(p_name)
             except ValueError as ve:
@@ -1213,32 +1072,17 @@ def reset_tenant_collections(
                 for l in phys_to_logicals.get(p_name, []):
                     failed_logicals.add(l)
 
+        # 5. Delete verified BM25 index files
+        for b_name in target_bm25_colls:
             try:
-                delete_bm25_index(p_name)
+                delete_bm25_index(b_name)
             except Exception as e:
-                logger.exception("Failed to delete BM25 index for collection '%s': %s", p_name, e)
-                failed_physical.append(f"{p_name}_bm25")
-                for l in phys_to_logicals.get(p_name, []):
+                logger.exception("Failed to delete BM25 index for collection '%s': %s", b_name, e)
+                failed_physical.append(f"{b_name}_bm25")
+                for l in phys_to_logicals.get(b_name, []):
                     failed_logicals.add(l)
 
-        # 4. Clean up any remaining BM25 indexes for known tenant logical collections
-        for l_name in tenant_logical_names:
-            if l_name in failed_logicals:
-                continue
-            for cand in [
-                tenant.get_scoped_collection_name(l_name),
-                tenant.get_legacy_scoped_collection_name(l_name),
-                tenant.get_pre_migration_scoped_collection_name(l_name),
-            ]:
-                if cand:
-                    try:
-                        delete_bm25_index(cand)
-                    except Exception as e:
-                        logger.exception("Failed to delete BM25 index '%s' for logical '%s': %s", cand, l_name, e)
-                        failed_physical.append(f"{cand}_bm25")
-                        failed_logicals.add(l_name)
-
-        # 5. Handle failures and relational DocumentRecord cleanup
+        # 6. Handle failures and relational DocumentRecord cleanup
         if failed_logicals or failed_physical:
             if failed_logicals:
                 # Atomically preserve records for failed collections while cleaning succeeded collections
@@ -1259,7 +1103,7 @@ def reset_tenant_collections(
 
         invalidate_tenant_cache(tenant.tenant_id)
 
-        logger.info("All collections deleted for tenant '%s'", tenant.tenant_name)
+        logger.info("All owned collections deleted for tenant '%s'", tenant.tenant_name)
         return {"message": f"All collections for tenant '{tenant.tenant_name}' deleted."}
 
     except HTTPException:

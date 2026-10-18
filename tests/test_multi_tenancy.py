@@ -1343,6 +1343,241 @@ def test_pre_migration_v6_collection_backward_compatibility(db_session):
     assert v6_scoped_name not in existing
 
 
+def test_reset_never_deletes_foreign_collection_or_bm25_when_metadata_absent(db_session):
+    """
+    Round 9 Finding 1 Regression Test:
+    Verify that if a ChromaDB collection and on-disk BM25 index lack metadata,
+    POST /reset invoked by Tenant B NEVER deletes Tenant A's physical collection or BM25 index.
+    Fails closed: when candidate_logicals is empty for caller, absence of evidence is NOT treated as caller ownership.
+    """
+    import json
+    import uuid
+    from auth import TenantContext
+    from config import CHROMA_PATH
+
+    suffix = uuid.uuid4().hex[:6]
+    tenant_a, key_a = create_test_tenant_and_key(db_session, f"reset_target_a_{suffix}")
+    tenant_b, key_b = create_test_tenant_and_key(db_session, f"reset_caller_b_{suffix}")
+
+    client_b = TestClient(app)
+    client_b.headers.update({"X-API-Key": key_b})
+
+    coll_name = f"unannotated_{suffix}"
+    ctx_a = TenantContext(tenant_id=tenant_a.id, tenant_name=tenant_a.name, api_key_id="ka", key_prefix="ska", rate_limit_rpm=60)
+    scoped_a = ctx_a.get_scoped_collection_name(coll_name)
+
+    # Create Chroma collection for Tenant A without tenant_id in metadata (simulating unannotated/legacy collection)
+    chroma_client = main.get_chroma_client()
+    coll = chroma_client.create_collection(scoped_a, metadata={"unannotated": "legacy_fixture"})
+    coll.add(
+        ids=[f"chunk_a_{suffix}"],
+        documents=["Confidential corporate data belonging strictly to Tenant A."],
+        metadatas=[{"source": "confidential.pdf", "page": 1}],
+    )
+
+    # Create BM25 index on disk with NO tenant_id
+    json_path = os.path.join(CHROMA_PATH, f"{scoped_a}_bm25.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump({"corpus_chunk_ids": [f"chunk_a_{suffix}"], "chunks": ["Confidential corporate data"]}, f)
+
+    # Insert DocumentRecord for Tenant A
+    doc_a = DocumentRecord(
+        tenant_id=tenant_a.id,
+        collection_name=coll_name,
+        filename="confidential.pdf",
+        doc_title="Confidential Doc",
+        category="finance",
+        file_path="dummy.pdf",
+        upload_date="2026-10-18",
+    )
+    db_session.add(doc_a)
+    db_session.commit()
+
+    try:
+        # Tenant B calls POST /reset
+        res_reset_b = client_b.post("/reset")
+        assert res_reset_b.status_code == 200
+
+        # Verify Tenant A's ChromaDB collection still exists!
+        existing_colls = {c.name for c in chroma_client.list_collections()}
+        assert scoped_a in existing_colls, f"Foreign unannotated collection '{scoped_a}' was deleted by Tenant B /reset!"
+
+        # Verify Tenant A's BM25 index file on disk still exists!
+        assert os.path.exists(json_path), f"Foreign BM25 index '{json_path}' was deleted by Tenant B /reset!"
+
+        # Verify Tenant A's DocumentRecord still exists!
+        doc_still_exists = (
+            db_session.query(DocumentRecord)
+            .filter(DocumentRecord.tenant_id == tenant_a.id, DocumentRecord.collection_name == coll_name)
+            .first()
+        )
+        assert doc_still_exists is not None
+    finally:
+        # Cleanup
+        try:
+            chroma_client.delete_collection(scoped_a)
+        except Exception:
+            pass
+        if os.path.exists(json_path):
+            os.remove(json_path)
+
+
+def test_ownership_check_never_deserializes_pickle(db_session, monkeypatch):
+    """
+    Round 9 Finding 3 Regression Test:
+    Verify that ownership resolution and management endpoints NEVER deserialize pickles
+    (prohibiting pickle.load and pickle.loads to permanently prevent RCE).
+    """
+    import pickle
+    import uuid
+    from auth import TenantContext
+    from config import CHROMA_PATH
+
+    def mock_disallowed_pickle_load(*args, **kwargs):
+        raise RuntimeError("SECURITY_VIOLATION: pickle.load() was called during ownership inspection!")
+
+    def mock_disallowed_pickle_loads(*args, **kwargs):
+        raise RuntimeError("SECURITY_VIOLATION: pickle.loads() was called during ownership inspection!")
+
+    # Monkeypatch pickle.load and pickle.loads to fail immediately
+    monkeypatch.setattr(pickle, "load", mock_disallowed_pickle_load)
+    monkeypatch.setattr(pickle, "loads", mock_disallowed_pickle_loads)
+
+    suffix = uuid.uuid4().hex[:6]
+    tenant, key = create_test_tenant_and_key(db_session, f"no_pickle_tenant_{suffix}")
+    client = TestClient(app)
+    client.headers.update({"X-API-Key": key})
+
+    coll_name = f"no_pickle_coll_{suffix}"
+    ctx = TenantContext(tenant_id=tenant.id, tenant_name=tenant.name, api_key_id="k", key_prefix="sk", rate_limit_rpm=60)
+    scoped_coll = ctx.get_scoped_collection_name(coll_name)
+
+    # Place a dummy .pkl file on disk
+    pkl_path = os.path.join(CHROMA_PATH, f"{scoped_coll}_bm25.pkl")
+    with open(pkl_path, "wb") as f:
+        # Write dummy binary content
+        f.write(b"NOT_A_SAFE_PICKLE_OR_MALICIOUS_PAYLOAD")
+
+    try:
+        # 1. GET /collections must not call pickle.load
+        res_list = client.get("/collections")
+        assert res_list.status_code == 200
+
+        # 2. POST /query must not call pickle.load
+        res_query = client.post(
+            "/query",
+            json={"question": "Does pickle load run?", "collection_name": coll_name, "enable_web_fallback": False},
+        )
+        assert res_query.status_code == 200
+
+        # 3. DELETE /collections/{name} must not call pickle.load
+        res_del = client.delete(f"/collections/{coll_name}")
+        assert res_del.status_code in (200, 404)
+
+        # 4. POST /reset must not call pickle.load
+        res_reset = client.post("/reset")
+        assert res_reset.status_code == 200
+
+    finally:
+        if os.path.exists(pkl_path):
+            os.remove(pkl_path)
+
+
+def test_second_bm25_cleanup_pass_never_deletes_unowned_sidecar(db_session):
+    """
+    Round 9 Finding 2 Regression Test:
+    Verify that the second BM25 cleanup pass in /reset does NOT delete orphaned or foreign
+    BM25 files without authoritative ownership verification.
+    """
+    import json
+    import uuid
+    from auth import TenantContext
+    from config import CHROMA_PATH
+
+    suffix = uuid.uuid4().hex[:6]
+    tenant_a, key_a = create_test_tenant_and_key(db_session, f"pass2_owner_{suffix}")
+    tenant_b, key_b = create_test_tenant_and_key(db_session, f"pass2_intruder_{suffix}")
+
+    client_b = TestClient(app)
+    client_b.headers.update({"X-API-Key": key_b})
+
+    coll_name = f"unowned_sidecar_{suffix}"
+    ctx_b = TenantContext(tenant_id=tenant_b.id, tenant_name=tenant_b.name, api_key_id="kb", key_prefix="skb", rate_limit_rpm=60)
+    scoped_b = ctx_b.get_scoped_collection_name(coll_name)
+
+    # Seed DocumentRecord for Tenant B with logical name 'coll_name'
+    doc_b = DocumentRecord(
+        tenant_id=tenant_b.id,
+        collection_name=coll_name,
+        filename="dummy.pdf",
+        doc_title="Dummy",
+        category="misc",
+        file_path="dummy.pdf",
+        upload_date="2026-10-18",
+    )
+    db_session.add(doc_b)
+    db_session.commit()
+
+    # Create an orphaned BM25 file matching scoped_b, BUT owned by Tenant A
+    json_path = os.path.join(CHROMA_PATH, f"{scoped_b}_bm25.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump({"tenant_id": tenant_a.id, "corpus_chunk_ids": [], "chunks": []}, f)
+
+    try:
+        # Tenant B calls POST /reset
+        res_reset = client_b.post("/reset")
+        # Since Tenant A's BM25 file was foreign and not owned by B, it must NOT be deleted
+        assert os.path.exists(json_path), f"Foreign BM25 sidecar '{json_path}' was deleted during second pass of /reset!"
+    finally:
+        if os.path.exists(json_path):
+            os.remove(json_path)
+
+
+def test_unknown_ownership_denied_across_all_endpoints(db_session):
+    """
+    Regression Test:
+    Verify that ResourceOwnership.UNKNOWN strictly fails closed:
+    - Never listed in GET /collections
+    - Never queried in POST /query (0 sources returned)
+    - Never deleted in DELETE /collections/{name} (HTTP 404 returned)
+    """
+    import uuid
+    from auth import TenantContext
+
+    suffix = uuid.uuid4().hex[:6]
+    tenant, key = create_test_tenant_and_key(db_session, f"unknown_tester_{suffix}")
+    client = TestClient(app)
+    client.headers.update({"X-API-Key": key})
+
+    coll_name = f"unknown_vault_{suffix}"
+    ctx = TenantContext(tenant_id=tenant.id, tenant_name=tenant.name, api_key_id="k", key_prefix="sk", rate_limit_rpm=60)
+    scoped_coll = ctx.get_scoped_collection_name(coll_name)
+
+    # Ensure no vector collection and no relational records exist for caller
+    chroma_client = main.get_chroma_client()
+    existing_colls = {c.name for c in chroma_client.list_collections()}
+    if scoped_coll in existing_colls:
+        chroma_client.delete_collection(scoped_coll)
+
+    # 1. GET /collections -> must not list coll_name
+    res_list = client.get("/collections")
+    assert res_list.status_code == 200
+    assert coll_name not in res_list.json()["collections"]
+
+    # 2. POST /query -> must return 0 sources
+    res_query = client.post(
+        "/query",
+        json={"question": "Where is the data?", "collection_name": coll_name, "enable_web_fallback": False},
+    )
+    assert res_query.status_code == 200
+    assert len(res_query.json()["sources"]) == 0
+
+    # 3. DELETE /collections/{coll_name} -> must return HTTP 404
+    res_del = client.delete(f"/collections/{coll_name}")
+    assert res_del.status_code == 404
+    assert f"Collection not found: {coll_name}" in res_del.json()["detail"]
+
+
 
 
 

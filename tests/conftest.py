@@ -64,8 +64,8 @@ def seed_test_collections(setup_test_database):
 
     db = SessionLocal()
     tenant = db.query(Tenant).filter(Tenant.name == "default_org").first()
-    prefix = f"t_{tenant.id[:12]}_" if tenant else "t_default_tena_"
-    db.close()
+    t_id = tenant.id if tenant else "default_tenant_id"
+    prefix = f"t_{t_id[:12]}_"
 
     fixtures_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "fixtures"))
     ece_pdf = os.path.join(fixtures_dir, "ece_academic_curriculum.pdf")
@@ -92,7 +92,7 @@ def seed_test_collections(setup_test_database):
 
     if is_empty(coll_hybrid) or not has_ee101:
         if os.path.exists(ece_pdf) and is_empty(coll_hybrid):
-            ingest_pdf(ece_pdf, coll_hybrid, force=True, source_name="ece_academic_curriculum.pdf", category="curriculum")
+            ingest_pdf(ece_pdf, coll_hybrid, force=True, source_name="ece_academic_curriculum.pdf", category="curriculum", tenant_id=t_id)
         from ingest import embed_and_store
         ee101_chunk = (
             "EE101 Elements of Electrical Engineering (3 Credits)\n"
@@ -107,14 +107,39 @@ def seed_test_collections(setup_test_database):
             "doc_title": "Academic Curriculum",
             "category": "curriculum",
             "chunk_id": "test_hybrid_coll_ee101_p135",
+            "tenant_id": t_id,
         }
-        embed_and_store([ee101_chunk], [ee101_meta], coll_hybrid, "ece_academic_curriculum.pdf", force=True)
+        embed_and_store([ee101_chunk], [ee101_meta], coll_hybrid, "ece_academic_curriculum.pdf", force=True, tenant_id=t_id)
 
     if is_empty(f"{prefix}telecom_architecture_coll") and os.path.exists(telecom_pdf):
-        ingest_pdf(telecom_pdf, f"{prefix}telecom_architecture_coll", force=True, source_name="telecom_cellular_architecture.pdf", category="telecom")
+        ingest_pdf(telecom_pdf, f"{prefix}telecom_architecture_coll", force=True, source_name="telecom_cellular_architecture.pdf", category="telecom", tenant_id=t_id)
 
     if is_empty(f"{prefix}ece_curriculum_coll") and os.path.exists(ece_pdf):
-        ingest_pdf(ece_pdf, f"{prefix}ece_curriculum_coll", force=True, source_name="ece_academic_curriculum.pdf", category="curriculum")
+        ingest_pdf(ece_pdf, f"{prefix}ece_curriculum_coll", force=True, source_name="ece_academic_curriculum.pdf", category="curriculum", tenant_id=t_id)
+
+    # Ensure DocumentRecord rows exist for default tenant
+    from models import DocumentRecord
+    for l_coll, f_name in [
+        ("test_hybrid_coll", "ece_academic_curriculum.pdf"),
+        ("telecom_architecture_coll", "telecom_cellular_architecture.pdf"),
+        ("ece_curriculum_coll", "ece_academic_curriculum.pdf"),
+    ]:
+        rec = db.query(DocumentRecord).filter(
+            DocumentRecord.tenant_id == t_id,
+            DocumentRecord.collection_name == l_coll,
+        ).first()
+        if not rec:
+            db.add(DocumentRecord(
+                tenant_id=t_id,
+                collection_name=l_coll,
+                filename=f_name,
+                doc_title=l_coll,
+                category="test",
+                file_path=f"dummy_{l_coll}.pdf",
+                upload_date="2026-10-18",
+            ))
+    db.commit()
+    db.close()
 
 
 

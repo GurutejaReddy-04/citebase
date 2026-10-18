@@ -293,7 +293,8 @@ def delete_bm25_index(collection_name: str) -> bool:
 
 def get_bm25_file_tenant_id(collection_name: str) -> Optional[str]:
     """
-    Inspect persistent BM25 file on disk (.json or .pkl) to extract owner tenant_id if present.
+    Inspect persistent BM25 JSON file on disk to extract owner tenant_id if present.
+    NEVER deserializes pickle files to prevent arbitrary code execution.
     """
     json_path = os.path.join(CHROMA_PATH, f"{collection_name}_bm25.json")
     if os.path.exists(json_path):
@@ -306,22 +307,6 @@ def get_bm25_file_tenant_id(collection_name: str) -> Optional[str]:
             for m in data.get("metadatas", []):
                 if isinstance(m, dict) and m.get("tenant_id"):
                     return str(m["tenant_id"])
-        except Exception:
-            pass
-
-    pkl_path = os.path.join(CHROMA_PATH, f"{collection_name}_bm25.pkl")
-    if os.path.exists(pkl_path):
-        try:
-            import pickle
-            with open(pkl_path, "rb") as f:
-                data = pickle.load(f)
-            if isinstance(data, dict):
-                tid = data.get("tenant_id")
-                if tid:
-                    return str(tid)
-                for m in data.get("metadatas", []):
-                    if isinstance(m, dict) and m.get("tenant_id"):
-                        return str(m["tenant_id"])
         except Exception:
             pass
 
