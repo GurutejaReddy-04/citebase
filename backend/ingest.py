@@ -321,6 +321,7 @@ def embed_and_store(
     collection_name: str,
     source_filename: str,
     force: bool = False,
+    tenant_id: Optional[str] = None,
 ) -> str:
     """
     Embed chunks with MiniLM and persist them with enriched metadata to ChromaDB.
@@ -331,10 +332,31 @@ def embed_and_store(
     embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
     client = get_chroma_client()
 
-    client.get_or_create_collection(
+    coll_meta = {"hnsw:space": "cosine"}
+    if tenant_id:
+        coll_meta["tenant_id"] = tenant_id
+
+    coll = client.get_or_create_collection(
         collection_name,
-        metadata={"hnsw:space": "cosine"},
+        metadata=coll_meta,
     )
+    if coll.metadata and coll.metadata.get("tenant_id") and tenant_id and coll.metadata.get("tenant_id") != tenant_id:
+        raise PermissionError(
+            f"Cross-tenant isolation violation: physical collection '{collection_name}' belongs to tenant '{coll.metadata['tenant_id']}'."
+        )
+
+    if tenant_id and (not coll.metadata or not coll.metadata.get("tenant_id")):
+        try:
+            merged = dict(coll.metadata or {})
+            merged["tenant_id"] = tenant_id
+            coll.modify(metadata=merged)
+        except Exception as e:
+            logger.exception("Failed to establish collection ownership metadata for '%s': %s", collection_name, e)
+            raise RuntimeError(f"Failed to establish collection ownership metadata for tenant '{tenant_id}': {e}") from e
+
+    if tenant_id:
+        for m in metadatas:
+            m["tenant_id"] = tenant_id
 
     vectorstore = Chroma(
         client=client,
@@ -384,6 +406,7 @@ def ingest_pdf(
     source_name: Optional[str] = None,
     doc_title: Optional[str] = None,
     category: Optional[str] = None,
+    tenant_id: Optional[str] = None,
 ) -> str:
     """Full pipeline: PDF -> structured elements -> enriched semantic chunks -> ChromaDB."""
     effective_source = source_name or os.path.basename(file_path)
@@ -393,5 +416,12 @@ def ingest_pdf(
         doc_title=doc_title,
         category=category,
     )
-    return embed_and_store(chunks, metadatas, collection_name, effective_source, force=force)
+    return embed_and_store(
+        chunks,
+        metadatas,
+        collection_name,
+        effective_source,
+        force=force,
+        tenant_id=tenant_id,
+    )
 

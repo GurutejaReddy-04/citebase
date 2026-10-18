@@ -44,6 +44,7 @@ def build_and_save_bm25_index(
     collection_name: str,
     chunks: list[str],
     metadatas: list[dict[str, Any]],
+    tenant_id: Optional[str] = None,
 ) -> None:
     """
     Build a BM25Okapi index from all chunks in a collection and persist to disk via atomic JSON.
@@ -62,6 +63,7 @@ def build_and_save_bm25_index(
     doc_freqs = [dict(df) for df in bm25.doc_freqs]
 
     index_json_data = {
+        "tenant_id": tenant_id,
         "doc_freqs": doc_freqs,
         "corpus_chunk_ids": corpus_chunk_ids,
         "avgdl": float(bm25.avgdl),
@@ -114,6 +116,7 @@ def rebuild_bm25_from_chroma(collection_name: str) -> bool:
         logger.warning("Collection '%s' does not exist in ChromaDB; cannot rebuild BM25", collection_name)
         return False
 
+    tenant_id = (coll.metadata or {}).get("tenant_id")
     include_fields: list[Any] = ["documents", "metadatas"]
     records = coll.get(include=include_fields)
     documents = records.get("documents") or []
@@ -124,7 +127,7 @@ def rebuild_bm25_from_chroma(collection_name: str) -> bool:
         return False
 
     metadatas = [dict(m) for m in raw_metadatas]
-    build_and_save_bm25_index(collection_name, documents, metadatas)
+    build_and_save_bm25_index(collection_name, documents, metadatas, tenant_id=tenant_id)
     return True
 
 
@@ -264,16 +267,62 @@ def search_bm25(
     return results
 
 
-def delete_bm25_index(collection_name: str) -> None:
-    """Delete the BM25 index file and clear from cache."""
+def delete_bm25_index(collection_name: str) -> bool:
+    """
+    Delete the BM25 index files (.json and legacy .pkl) and clear from in-memory cache.
+    Raises IOError if a file exists on disk but cannot be deleted.
+    Returns True if an index file was removed or cache was cleared; False otherwise.
+    """
     with _CACHE_LOCK:
-        _INDEX_CACHE.pop(collection_name, None)
+        was_in_cache = _INDEX_CACHE.pop(collection_name, None) is not None
 
+    deleted_file = False
     for ext in (".json", ".pkl"):
         file_path = os.path.join(CHROMA_PATH, f"{collection_name}_bm25{ext}")
         if os.path.exists(file_path):
             try:
                 os.remove(file_path)
+                deleted_file = True
                 logger.info("Deleted BM25 index file '%s'", file_path)
-            except Exception:
-                logger.warning("Failed to delete BM25 file '%s'", file_path, exc_info=True)
+            except Exception as e:
+                logger.exception("Failed to delete BM25 index file '%s': %s", file_path, e)
+                raise IOError(f"Failed to delete BM25 file '{file_path}': {e}") from e
+
+    return was_in_cache or deleted_file
+
+
+def get_bm25_file_tenant_id(collection_name: str) -> Optional[str]:
+    """
+    Inspect persistent BM25 file on disk (.json or .pkl) to extract owner tenant_id if present.
+    """
+    json_path = os.path.join(CHROMA_PATH, f"{collection_name}_bm25.json")
+    if os.path.exists(json_path):
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            tid = data.get("tenant_id")
+            if tid:
+                return str(tid)
+            for m in data.get("metadatas", []):
+                if isinstance(m, dict) and m.get("tenant_id"):
+                    return str(m["tenant_id"])
+        except Exception:
+            pass
+
+    pkl_path = os.path.join(CHROMA_PATH, f"{collection_name}_bm25.pkl")
+    if os.path.exists(pkl_path):
+        try:
+            import pickle
+            with open(pkl_path, "rb") as f:
+                data = pickle.load(f)
+            if isinstance(data, dict):
+                tid = data.get("tenant_id")
+                if tid:
+                    return str(tid)
+                for m in data.get("metadatas", []):
+                    if isinstance(m, dict) and m.get("tenant_id"):
+                        return str(m["tenant_id"])
+        except Exception:
+            pass
+
+    return None

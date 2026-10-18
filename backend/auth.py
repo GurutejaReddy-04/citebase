@@ -32,14 +32,96 @@ class TenantContext:
     key_prefix: str
     rate_limit_rpm: int
 
+    @property
+    def is_legacy_tenant(self) -> bool:
+        """
+        Only tenants created with legacy <=12-char IDs or seeded default tenants can own legacy collections.
+        Modern tenants created with 32-char UUIDs return False to prevent prefix collision hijacking.
+        """
+        return len(self.tenant_id) <= 12 or self.tenant_id in ("default_tenant_id", "default_tena")
+
+    @property
+    def normalized_tid(self) -> str:
+        """
+        Normalized tenant identifier used in physical collection scoping.
+        - Tenant IDs <= 32 chars (standard 32-char hex UUIDs, legacy IDs) are used directly.
+        - Long tenant IDs (> 32 chars, up to 64 chars) derive a full 128-bit cryptographic
+          namespace token (32 hexadecimal characters of SHA-256), providing full 128-bit
+          collision resistance (P < 10^-18).
+        """
+        if len(self.tenant_id) <= 32:
+            return self.tenant_id
+        return hashlib.sha256(self.tenant_id.encode("utf-8")).hexdigest()[:32]
+
     def get_scoped_collection_name(self, raw_collection_name: str) -> str:
         """
         Generate the internal, tenant-isolated collection key.
-        Guarantees total length <= 63 characters for ChromaDB compliance.
+        - Direct mapping: If 't_{tid}_{clean_name}' <= 63 chars, use directly.
+          Because clean_name matches ^[a-z0-9][a-z0-9_-]{1,43}[a-z0-9]$, direct names never contain a dot ('.').
+        - Disjoint hash-tailing: If direct length > 63 chars, use 't_{tid}_{prefix}.{name_hash}'.
+          The inclusion of a dot ('.') guarantees mathematical disjointness between direct and compressed names,
+          preventing any short logical name from colliding with an internal compressed name.
+        - Uniqueness Guarantee: Disjointness between uncompressed and compressed classes is mathematically
+          proven (empty intersection). Collision resistance among distinct compressed names within a tenant
+          is cryptographically guaranteed by 64-bit truncated SHA-256 (probabilistic collision risk < 10^-9
+          for 100k collections per tenant). Runtime collision detection is enforced at ingestion boundary.
+        - Long Tenant ID Identity: Long tenant IDs (> 32 chars) derive a 128-bit namespace token (32 hex chars),
+          unconditionally guaranteeing total physical collection length <= 63 across all tenant IDs up to 64 chars
+          and all collection names up to 45 chars.
         """
-        clean_name = raw_collection_name.strip().lower()
-        tenant_prefix = self.tenant_id[:12]
-        return f"t_{tenant_prefix}_{clean_name[:45]}"
+        clean_name = raw_collection_name.strip()
+        tid = self.normalized_tid
+        direct = f"t_{tid}_{clean_name}"
+        if len(direct) <= 63:
+            return direct
+
+        prefix_base = f"t_{tid}_"
+        budget = 63 - len(prefix_base) - 1  # 1 char reserved for delimiter '.'
+        hash_len = min(16, max(8, budget))
+        name_hash = hashlib.sha256(clean_name.encode("utf-8")).hexdigest()[:hash_len]
+        prefix_budget = budget - hash_len
+        if prefix_budget > 0:
+            prefix = clean_name[:prefix_budget].rstrip("_-") or clean_name[:prefix_budget]
+            return f"{prefix_base}{prefix}.{name_hash}"
+        return f"t_{tid}.{name_hash}"
+
+    def get_legacy_scoped_collection_name(self, raw_collection_name: str) -> Optional[str]:
+        """
+        Fallback for seeded legacy collections. Returns None for modern 32-char tenants
+        to strictly prevent cross-tenant legacy fallback hijacking.
+        """
+        if not self.is_legacy_tenant:
+            return None
+        clean_name = raw_collection_name.strip()
+        return f"t_{self.tenant_id[:12]}_{clean_name}"
+
+    def get_pre_migration_scoped_collection_name(self, raw_collection_name: str) -> Optional[str]:
+        """
+        Compatibility resolver for collections created under prior v6 scheme (Oct 2026):
+        - Tenant IDs with length 33-36 chars were direct: 't_{tid}_{clean_name}'
+        - Tenant IDs > 36 chars used: 't_{tid[:24] + sha256[:8]}_{clean_name}'
+        Returns the v6 physical collection name if len(tenant_id) > 32, otherwise None.
+        """
+        if len(self.tenant_id) <= 32:
+            return None
+        clean_name = raw_collection_name.strip()
+        old_tid = (
+            self.tenant_id
+            if len(self.tenant_id) <= 36
+            else f"{self.tenant_id[:24]}{hashlib.sha256(self.tenant_id.encode('utf-8')).hexdigest()[:8]}"
+        )
+        direct = f"t_{old_tid}_{clean_name}"
+        if len(direct) <= 63:
+            return direct
+        prefix_base = f"t_{old_tid}_"
+        budget = 63 - len(prefix_base) - 1
+        hash_len = min(16, max(8, budget))
+        name_hash = hashlib.sha256(clean_name.encode("utf-8")).hexdigest()[:hash_len]
+        prefix_budget = budget - hash_len
+        if prefix_budget > 0:
+            prefix = clean_name[:prefix_budget].rstrip("_-") or clean_name[:prefix_budget]
+            return f"{prefix_base}{prefix}.{name_hash}"
+        return f"t_{old_tid}.{name_hash}"
 
 
 def hash_api_key(raw_key: str) -> str:

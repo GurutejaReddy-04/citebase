@@ -90,8 +90,9 @@ def test_rate_limiter_fallback(monkeypatch):
         rate_limit_rpm=2,
     )
 
-    # Clear any previous memory counts for this prefix
+    # Clear any previous memory counts for this prefix/api_key_id
     with _memory_lock:
+        _memory_counters.pop(tenant.api_key_id, None)
         _memory_counters.pop(tenant.key_prefix, None)
 
     # Mock get_redis_client to return a client whose pipeline raises an exception
@@ -220,3 +221,22 @@ def test_upload_path_traversal_sanitization(client):
     assert ".." not in filename_in_resp
     assert "/" not in filename_in_resp
     assert "\\" not in filename_in_resp
+
+
+def test_database_migration_failure_raises_runtime_error(monkeypatch):
+    """Verify that a database schema migration failure raises RuntimeError rather than silently passing."""
+    import database
+    from unittest.mock import MagicMock
+
+    # Create mock engine whose begin() context manager raises on migration query
+    mock_engine = MagicMock()
+    mock_engine.dialect.name = "sqlite"
+    mock_conn = MagicMock()
+    mock_conn.execute.side_effect = Exception("Simulated disk I/O error during ALTER TABLE")
+    mock_engine.begin.return_value.__enter__.return_value = mock_conn
+
+    monkeypatch.setattr(database, "engine", mock_engine)
+
+    with pytest.raises(RuntimeError, match="Database schema migration failed"):
+        database.init_db()
+

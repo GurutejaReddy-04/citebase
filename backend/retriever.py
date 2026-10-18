@@ -169,33 +169,36 @@ def retrieve_context(
         try:
             embeddings = get_embeddings()
             client = get_chroma_client()
+            existing_colls = {c.name for c in client.list_collections()}
+            if coll in existing_colls:
+                vectorstore = Chroma(
+                    client=client,
+                    collection_name=coll,
+                    embedding_function=embeddings,
+                )
 
-            vectorstore = Chroma(
-                client=client,
-                collection_name=coll,
-                embedding_function=embeddings,
-            )
+                search_kwargs: dict[str, Any] = {"k": candidate_pool_size}
+                if filters and isinstance(filters, dict) and len(filters) > 0:
+                    search_kwargs["filter"] = filters
 
-            search_kwargs: dict[str, Any] = {"k": candidate_pool_size}
-            if filters and isinstance(filters, dict) and len(filters) > 0:
-                search_kwargs["filter"] = filters
-
-            chroma_res = vectorstore.similarity_search_with_score(query, **search_kwargs)
-            for doc, dist in chroma_res:
-                dense_results.append({
-                    "content":         doc.page_content,
-                    "page":            doc.metadata.get("page"),
-                    "source":          doc.metadata.get("source"),
-                    "doc_title":       doc.metadata.get("doc_title", doc.metadata.get("source")),
-                    "category":        doc.metadata.get("category", "uncategorized"),
-                    "upload_date":     doc.metadata.get("upload_date", ""),
-                    "section":         doc.metadata.get("section", "General"),
-                    "breadcrumb":      doc.metadata.get("breadcrumb", "General"),
-                    "chunk_id":        doc.metadata.get("chunk_id", ""),
-                    "collection_name": coll,
-                    "score":           round(dist, 4),  # Cosine distance
-                })
-            logger.info("Dense search returned %d candidates from '%s'", len(dense_results), coll)
+                chroma_res = vectorstore.similarity_search_with_score(query, **search_kwargs)
+                for doc, dist in chroma_res:
+                    dense_results.append({
+                        "content":         doc.page_content,
+                        "page":            doc.metadata.get("page"),
+                        "source":          doc.metadata.get("source"),
+                        "doc_title":       doc.metadata.get("doc_title", doc.metadata.get("source")),
+                        "category":        doc.metadata.get("category", "uncategorized"),
+                        "upload_date":     doc.metadata.get("upload_date", ""),
+                        "section":         doc.metadata.get("section", "General"),
+                        "breadcrumb":      doc.metadata.get("breadcrumb", "General"),
+                        "chunk_id":        doc.metadata.get("chunk_id", ""),
+                        "collection_name": coll,
+                        "score":           round(dist, 4),  # Cosine distance
+                    })
+                logger.info("Dense search returned %d candidates from '%s'", len(dense_results), coll)
+            else:
+                logger.info("Collection '%s' does not exist in ChromaDB; skipping dense search", coll)
         except Exception:
             logger.warning("Dense search failed for collection '%s'", coll, exc_info=True)
 

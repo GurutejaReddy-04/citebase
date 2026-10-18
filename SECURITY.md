@@ -89,26 +89,72 @@ Every entity in PostgreSQL (`DocumentRecord`, `IngestionTask`, `QueryLog`, `ApiK
 SELECT * FROM document_records WHERE tenant_id = :tenant_id AND collection_name = :coll;
 ```
 
-### 4.2 Vector Database Namespacing (ChromaDB)
-To prevent cross-tenant vector contamination in ChromaDB, collections are dynamically prefixed using the tenant's identifier:
+### 4.2 Vector Database Namespacing & Tenant Isolation (ChromaDB)
+To prevent cross-tenant vector contamination in ChromaDB, collections are dynamically prefixed using the tenant's full identifier:
 ```python
-def get_scoped_collection_name(tenant_id: str, raw_name: str) -> str:
-    clean_name = raw_name.strip().lower()
-    tenant_prefix = tenant_id[:12]
-    # Guarantees total length <= 63 characters for ChromaDB compliance
-    return f"t_{tenant_prefix}_{clean_name[:45]}"
+def get_scoped_collection_name(self, raw_collection_name: str) -> str:
+    clean_name = raw_collection_name.strip()
+    direct = f"t_{self.tenant_id}_{clean_name}"
+    if len(direct) <= 63:
+        return direct
+    # Genuinely disjoint encoding scheme:
+    # Client names cannot contain '.', so dot-separated hash-tailing is mathematically disjoint from all uncompressed names.
+    prefix_base = f"t_{self.tenant_id}_"
+    budget = 63 - len(prefix_base) - 1
+    hash_len = min(16, max(8, budget))
+    name_hash = hashlib.sha256(clean_name.encode("utf-8")).hexdigest()[:hash_len]
+    prefix_budget = budget - hash_len
+    if prefix_budget > 0:
+        prefix = clean_name[:prefix_budget].rstrip("_-") or clean_name[:prefix_budget]
+        return f"{prefix_base}{prefix}.{name_hash}"
+    return f"t_{self.tenant_id}.{name_hash}"
 ```
-Even if Tenant B submits an API request targeting a collection named `financial_audit`, the backend maps it to `t_{tenant_b_id[:12]}_financial_audit`, ensuring complete partition isolation from Tenant A's `t_{tenant_a_id[:12]}_financial_audit`.
+Client names are canonicalized and validated at the API boundary (lowercase alphanumeric with `_` and `-`, 3–45 characters), preserving backward compatibility for legacy naming schemas. Total internal collection name length strictly satisfies ChromaDB's 63-character limit across all tenants (including long-named seeded tenants like `default_tenant_id`).
+
+**Mathematical Disjointness vs. Cryptographic Collision Resistance:**
+- **Proven Disjoint Separation:** Uncompressed physical collections never contain a period (`.`) because client collection names strictly disallow dots (`^[a-z0-9][a-z0-9_-]{1,43}[a-z0-9]$`). Compressed physical collection names always incorporate a period delimiter preceding the cryptographic hash (`.{name_hash}`). The intersection between the uncompressed namespace and the compressed namespace is empty ($\emptyset$), mathematically preventing any short logical name from colliding with an internal hash tail.
+- **Collision Resistance Among Compressed Names:** For distinct long names requiring compression, uniqueness is protected by a 64-bit truncated SHA-256 digest (providing a high-entropy probabilistic guarantee where collision risk is $< 10^{-9}$ for 100,000 collections per tenant). At ingestion boundary (`/upload`), runtime uniqueness checks verify that a newly uploaded collection does not resolve to an identical physical collection as another logical collection for that tenant, rejecting collisions with HTTP 409 Conflict.
+- **128-Bit Cryptographic Tenant Namespace Identity:** Tenant identifiers up to 32 characters (including standard 32-character hex UUIDs and legacy IDs) are used directly. Tenant identifiers longer than 32 characters (up to 64 characters) dynamically derive a full 128-bit cryptographic namespace token via 32 hexadecimal characters of SHA-256 (`hashlib.sha256(tid).hexdigest()[:32]`), providing full 128-bit collision resistance ($P < 10^{-18}$) and unconditionally guaranteeing total physical collection length $\le 63$ across all tenant IDs up to 64 chars and all collection names up to 45 chars.
+- **Defense-in-Depth Cross-Tenant Isolation:** Even under hypothetical or engineered collisions where two distinct long tenant IDs share the exact same physical collection namespace:
+  - **Upload boundary (`/upload`):** Detects if the target physical collection is already owned by or mapped to another tenant in ChromaDB metadata or relational storage, rejecting cross-tenant overwrites with HTTP 409 Conflict.
+  - **Query boundary (`/query`):** Enforces collection accessibility rules; if a physical collection exists in ChromaDB but is owned by another tenant, it is omitted from target search pools, returning 0 sources to the unauthorized caller.
+  - **Deletion boundary (`DELETE /collections/{name}`):** Verifies collection ownership; attempts to delete collections owned by other tenants are rejected with HTTP 404 (`CollectionNotFoundError`), preserving underlying vectors, index files, and relational records intact.
+
+**Physical Deletion Atomicity & Observability:**
+Collection deletion (`DELETE /collections/{name}`) and tenant reset (`POST /reset`) execute physical vector removal in ChromaDB and sparse index deletion on disk before modifying database state:
+1. **Specific Missing-Collection Recognition:** `ValueError` from ChromaDB is only treated as "already deleted" if the exception specifically confirms the collection is absent (`"does not exist"`). Any unrecognized `ValueError` or unexpected deletion error raises HTTP 500 and halts deletion.
+2. **Comprehensive BM25 Cleanup (.json & legacy .pkl):** Existence checks and cleanup routines inspect both active `.json` and legacy `.pkl` index files. File-removal exceptions during BM25 index deletion (`delete_bm25_index`) are propagated to the API boundary as HTTP 500 (`"Incomplete collection deletion: failed to remove persistent BM25 index"`), preventing silent retention of plaintext chunks.
+3. **Orphaned BM25 Sidecar Ownership Verification:** BM25 files record root-level `tenant_id` metadata. In the event of orphaned BM25 files (vector collection deleted but sparse index retained on disk), `DELETE /collections/{name}` inspects disk sidecars (`get_bm25_file_tenant_id`) and relational database records. Deletion is rejected with HTTP 404 (`CollectionNotFoundError`) if ownership belongs to another tenant or cannot be verified when `doc_count == 0`.
+4. **Tenant Reset Atomicity (`/reset`):** `/reset` tracks deletion status per collection. For collections lacking metadata, relational ownership is verified fail-closed. If physical deletion in ChromaDB or BM25 fails for any collection, its relational `DocumentRecord` rows are preserved, and HTTP 500 is returned reporting incomplete reset.
+5. **Relational Record Consistency:** Relational `DocumentRecord` rows in PostgreSQL/SQLite are only deleted after both ChromaDB vector deletion and BM25 index file deletion have definitively succeeded. If any failure occurs, relational records remain intact, preserving consistent state and enabling safe retries.
+
+**Fail-Closed Query Isolation on Missing Ownership Metadata:**
+When ChromaDB collection metadata lacks explicit `tenant_id` ownership (e.g. from third-party or legacy ingestion), `is_collection_accessible_to_tenant()` strictly evaluates foreign relational records first. If any other tenant owns documents under that logical collection name, access is denied immediately (`False`), preventing shared chunk leakage. Ingestion (`embed_and_store`) strictly fails with `RuntimeError` if collection ownership metadata cannot be established, eliminating unowned collections.
+
+**Pre-Migration v6 Namespace Compatibility:**
+To maintain continuous access for collections created under prior v6 naming schemes (where tenant IDs > 32 characters were unhashed for 33–36 characters or used `tid[:24] + sha256[:8]`), `TenantContext.get_pre_migration_scoped_collection_name()` provides a dedicated compatibility resolver. Collections created under this scheme remain fully discoverable via `GET /collections`, queryable via `POST /query`, and deletable via `DELETE /collections/{name}`.
+
+**Strict Legacy Resolver Isolation Guard:**
+To support existing installations without orphaning pre-migration data, legacy collection lookups (`t_{tenant_id[:12]}_{clean_name}`) are strictly guarded:
+- Only verified legacy tenants (`len(tenant_id) <= 12` or seeded default tenants) are permitted to resolve legacy collections.
+- For all modern 32-character UUID tenants, `get_legacy_scoped_collection_name()` unconditionally returns `None`.
+- Even if a modern tenant's 32-character UUID shares its first 12 characters with an older legacy tenant, the modern tenant cannot resolve, query, or delete the legacy tenant's collections via `/query` or `DELETE /collections/{name}`.
 
 ### 4.3 Sparse Keyword Index Isolation (BM25)
 BM25 sparse indices are saved atomically on disk using paths scoped strictly by the internal collection identifier:
-`data/bm25_indices/{scoped_collection_name}.json`
+`{CHROMA_PATH}/{scoped_collection_name}_bm25.json`
 Tenant collections cannot access, read, or overwrite index files belonging to other organizations.
 
 ### 4.4 Cache Partitioning (Redis)
-All Redis response cache keys are strictly namespaced by tenant ID:
-`rag:cache:{tenant_id}:{query_sha256}`
-Even if Tenant A and Tenant B ask the exact same question against their own collections, Tenant B will **never** receive Tenant A's cached response.
+All Redis response cache keys are strictly namespaced by tenant ID and include all result-affecting query options:
+`rag_cache:{tenant_id}:{query_sha256}`
+The cache key hashes the normalized question, target collections, metadata filters, reranker state, web-fallback toggle, and web search provider. Even if Tenant A and Tenant B ask the exact same question against their own collections, Tenant B will **never** receive Tenant A's cached response.
+
+### 4.5 Background Ingestion & Durability Boundary (Documented Architectural Limitation)
+> [!NOTE]
+> **Architectural Status — Durability Not Implemented (Documented Limitation)**:
+> Ingestion tasks execute asynchronously in-process via FastAPI `BackgroundTasks`. While relational task metadata and active worker heartbeats (`updated_at`) are maintained in PostgreSQL, in-flight task execution is not durable across host reboots, process crashes, or container terminations.
+> - **Liveness vs. Progress:** The daemon heartbeat thread tracks worker thread liveness, allowing slow, heavy parsing operations to continue without premature timeout. However, heartbeat renewal indicates thread existence rather than incremental progress metrics. If an underlying PDF extraction or embedding library hangs indefinitely in native C code, heartbeats continue until the container or process is terminated. Distributed durability, incremental progress reporting, and task leasing via external brokers (e.g. Celery + Redis/RabbitMQ or AWS SQS) are documented architectural milestones for distributed multi-node production.
 
 ---
 

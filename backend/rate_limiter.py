@@ -11,6 +11,7 @@ import time
 from fastapi import Depends, HTTPException, status
 
 from auth import TenantContext, get_current_tenant
+from config import DEFAULT_RATE_LIMIT_RPM
 from redis_client import get_redis_client
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,12 @@ logger = logging.getLogger(__name__)
 # Simple in-memory fallback dict with lock if Redis is unavailable or fails
 _memory_counters: dict[str, tuple[int, int]] = {}
 _memory_lock = threading.Lock()
+
+
+def get_rate_limit_redis_key(limiter_key: str, timestamp: int | None = None) -> str:
+    """Construct the exact Redis rate-limit key for a limiter token in the current minute bucket."""
+    t = int(time.time()) if timestamp is None else int(timestamp)
+    return f"ratelimit:{limiter_key}:{t // 60}"
 
 
 def check_rate_limit(
@@ -30,13 +37,17 @@ def check_rate_limit(
         HTTPException(429) if rate limit is exceeded for the current minute bucket.
     """
     limit = tenant.rate_limit_rpm
-    if limit <= 0:
-        return tenant  # Unlimited
+    if limit is None or limit <= 0:
+        # Defensive fallback: prevent quota bypass via nonpositive numbers
+        limit = DEFAULT_RATE_LIMIT_RPM
+        tenant.rate_limit_rpm = DEFAULT_RATE_LIMIT_RPM
 
     now = int(time.time())
     minute_bucket = now // 60
     seconds_left = 60 - (now % 60)
-    key = f"ratelimit:{tenant.key_prefix}:{minute_bucket}"
+    # Scope counters by unique api_key_id to prevent collision across keys sharing prefix
+    limiter_key = tenant.api_key_id or tenant.key_prefix
+    key = get_rate_limit_redis_key(limiter_key, now)
 
     client = get_redis_client()
     current_count = None
@@ -55,12 +66,12 @@ def check_rate_limit(
     if current_count is None:
         # Thread-safe in-memory dict fallback
         with _memory_lock:
-            count, bucket = _memory_counters.get(tenant.key_prefix, (0, minute_bucket))
+            count, bucket = _memory_counters.get(limiter_key, (0, minute_bucket))
             if bucket != minute_bucket:
                 count = 1
             else:
                 count += 1
-            _memory_counters[tenant.key_prefix] = (count, minute_bucket)
+            _memory_counters[limiter_key] = (count, minute_bucket)
             current_count = count
 
     if current_count > limit:

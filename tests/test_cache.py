@@ -250,3 +250,100 @@ def test_cache_invalidation_on_upload():
     # Query 3 -> Must be a Miss because upload invalidated the cache!
     res3 = client.post("/query", json=query_payload)
     assert res3.json()["cached"] is False
+
+
+def test_cache_key_isolation_by_web_fallback_and_provider():
+    """
+    Verify cache keys partition by result-affecting query settings:
+    - Queries differing only by enable_web_fallback produce distinct cache keys.
+    - Queries differing only by web_provider produce distinct cache keys.
+    """
+    from cache import build_cache_key
+
+    # 1. Deterministic cache key partition checks
+    k_local = build_cache_key("t1", "what is quantum computing", ["physics"], enable_web_fallback=False)
+    k_web = build_cache_key("t1", "what is quantum computing", ["physics"], enable_web_fallback=True)
+    assert k_local != k_web, "Cache keys must differ when enable_web_fallback differs"
+
+    k_ddg = build_cache_key("t1", "news today", ["general"], enable_web_fallback=True, web_provider="duckduckgo")
+    k_tav = build_cache_key("t1", "news today", ["general"], enable_web_fallback=True, web_provider="tavily")
+    assert k_ddg != k_tav, "Cache keys must differ when web_provider differs"
+
+    # 2. Integration check via test client
+    suffix = uuid.uuid4().hex[:6]
+    tenant_id, client = create_tenant_and_client(f"cache_provider_tenant_{suffix}")
+    coll_name = f"cache_param_coll_{suffix}"
+    pdf_bytes = make_test_pdf("Neural network optimization documentation.")
+    client.post(
+        "/upload?sync=true",
+        files={"file": ("doc.pdf", pdf_bytes, "application/pdf")},
+        data={"collection_name": coll_name},
+    )
+
+    # First query without web fallback -> Miss, then stored
+    q_no_web = {"question": "What is neural optimization?", "collection_name": coll_name, "enable_web_fallback": False}
+    r1 = client.post("/query", json=q_no_web)
+    assert r1.status_code == 200
+    assert r1.json()["cached"] is False
+
+    # Second query without web fallback -> Hit
+    r2 = client.post("/query", json=q_no_web)
+    assert r2.status_code == 200
+    assert r2.json()["cached"] is True
+
+    # Third query with identical question BUT enable_web_fallback=True -> Must be a Miss!
+    q_with_web = {"question": "What is neural optimization?", "collection_name": coll_name, "enable_web_fallback": True}
+    r3 = client.post("/query", json=q_with_web)
+    assert r3.status_code == 200
+    assert r3.json()["cached"] is False
+
+
+def test_cache_key_respects_configured_default_provider(monkeypatch):
+    """
+    Verify that when web_provider is omitted in request, cache keys resolve against
+    the server's configured WEB_SEARCH_PROVIDER. Changing WEB_SEARCH_PROVIDER
+    produces distinct cache keys, preventing stale entries across provider switches.
+    """
+    import cache
+    from cache import build_cache_key
+
+    # When WEB_SEARCH_PROVIDER is 'duckduckgo'
+    monkeypatch.setattr(cache, "WEB_SEARCH_PROVIDER", "duckduckgo")
+    key_ddg = build_cache_key("t1", "market summary", ["finance"], enable_web_fallback=True, web_provider=None)
+
+    # When WEB_SEARCH_PROVIDER is changed to 'tavily'
+    monkeypatch.setattr(cache, "WEB_SEARCH_PROVIDER", "tavily")
+    key_tav = build_cache_key("t1", "market summary", ["finance"], enable_web_fallback=True, web_provider=None)
+
+    assert key_ddg != key_tav, "Cache key must vary when server-configured default WEB_SEARCH_PROVIDER changes"
+
+    # Also verify that web_provider=None produces identical key as explicit configured provider
+    key_explicit_tav = build_cache_key("t1", "market summary", ["finance"], enable_web_fallback=True, web_provider="tavily")
+    assert key_tav == key_explicit_tav, "Omitted web_provider must match explicit effective provider"
+
+
+def test_cache_key_preserves_technical_punctuation():
+    """
+    Verify that cache key normalization preserves technical punctuation:
+    - 'What does C++ compile to?' and 'What does C compile to?' produce distinct cache keys.
+    - 'What is C#?' and 'What is C?' produce distinct cache keys.
+    - Terminal sentence punctuation (? vs !) still normalizes to avoid redundant cache misses.
+    """
+    from cache import build_cache_key, normalize_question
+
+    # Normalization tests
+    assert normalize_question("What does C++ compile to?") == "what does c++ compile to"
+    assert normalize_question("What does C compile to?") == "what does c compile to"
+    assert normalize_question("What does C# do?") == "what does c# do"
+    assert normalize_question("What is C++?") == normalize_question("What is C++!")
+
+    # Cache key tests
+    k_cpp = build_cache_key("tenant_1", "What does C++ compile to?", ["code"])
+    k_c = build_cache_key("tenant_1", "What does C compile to?", ["code"])
+    assert k_cpp != k_c, "C++ and C must have distinct cache keys"
+
+    k_csharp = build_cache_key("tenant_1", "What is C#?", ["code"])
+    k_c_only = build_cache_key("tenant_1", "What is C?", ["code"])
+    assert k_csharp != k_c_only, "C# and C must have distinct cache keys"
+
+

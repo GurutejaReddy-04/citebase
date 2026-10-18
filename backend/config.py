@@ -32,6 +32,10 @@ WEB_SEARCH_PROVIDER           = os.getenv("WEB_SEARCH_PROVIDER", "duckduckgo").l
 TAVILY_API_KEY                = os.getenv("TAVILY_API_KEY")
 # Provisional fallback threshold (sigmoid 0..1); to be re-tuned empirically once Phase 7 eval framework produces benchmark data
 WEB_SEARCH_FALLBACK_THRESHOLD = float(os.getenv("WEB_SEARCH_FALLBACK_THRESHOLD", "0.35"))
+# Non-reranked fallback distance threshold (0.0=identical, 2.0=disjoint).
+# If the lowest synthetic distance of local candidates exceeds this threshold, local relevance is deemed insufficient.
+# By default, a synthetic distance > 1.40 (corresponding to normalized RRF similarity < 0.30) triggers fallback.
+WEB_SEARCH_FALLBACK_DISTANCE_THRESHOLD = float(os.getenv("WEB_SEARCH_FALLBACK_DISTANCE_THRESHOLD", "1.40"))
 WEB_SEARCH_MAX_RESULTS        = int(os.getenv("WEB_SEARCH_MAX_RESULTS", 4))
 
 # --- llm ---

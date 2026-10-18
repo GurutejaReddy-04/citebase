@@ -21,8 +21,8 @@ from database import Base
 
 
 def generate_uuid() -> str:
-    """Generate a clean 12-char alphanumeric UUID."""
-    return uuid.uuid4().hex[:12]
+    """Generate a clean 32-char alphanumeric UUID with full 128-bit entropy."""
+    return uuid.uuid4().hex
 
 
 def get_utc_now() -> datetime:
@@ -134,6 +134,7 @@ class IngestionTask(Base):
     total_chunks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=get_utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=get_utc_now, onupdate=get_utc_now, nullable=False)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # Relationships

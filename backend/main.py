@@ -20,6 +20,7 @@ Routes:
   GET    /admin/api-keys            List active API keys for tenant
 """
 
+import hashlib
 import logging
 import os
 import re
@@ -61,12 +62,14 @@ from cache import (
 )
 from config import (
     ALLOWED_ORIGINS,
+    CHROMA_PATH,
     ENABLE_RERANKER,
     ENABLE_WEB_SEARCH,
     ENV,
     MIN_RELEVANCE_SCORE,
     TOP_K_RESULTS,
     UPLOAD_DIR,
+    WEB_SEARCH_FALLBACK_DISTANCE_THRESHOLD,
     WEB_SEARCH_FALLBACK_THRESHOLD,
     WEB_SEARCH_PROVIDER,
 )
@@ -81,7 +84,7 @@ from reranker import rerank_documents
 from retriever import retrieve_context
 from tasks import run_background_ingest
 from web_search import search_web
-from bm25 import delete_bm25_index
+from bm25 import delete_bm25_index, get_bm25_file_tenant_id
 
 # --- logging ---
 logging.basicConfig(
@@ -156,8 +159,8 @@ async def add_process_time_header(request: Request, call_next: Any) -> Response:
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# ChromaDB collection naming regex
-_COLLECTION_NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_-]{1,61}[a-zA-Z0-9]$')
+# Canonical ChromaDB collection naming regex (lowercase alphanumeric, hyphen, underscore, 3-45 chars)
+_COLLECTION_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9_-]{1,43}[a-z0-9]$')
 
 
 def _validate_collection_name(name: str) -> None:
@@ -166,9 +169,8 @@ def _validate_collection_name(name: str) -> None:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Invalid collection name. Must be 3-63 characters, contain only "
-                "letters, digits, hyphens (-), or underscores (_), and start/end "
-                "with a letter or digit."
+                "Invalid collection name. Must be 3-45 characters, lowercase alphanumeric with "
+                "hyphens (-) or underscores (_), and start/end with a letter or digit."
             ),
         )
 
@@ -212,8 +214,13 @@ class QueryResponse(BaseModel):
 
 
 class CreateApiKeyRequest(BaseModel):
-    name:           Optional[str] = "API Key"
-    rate_limit_rpm: Optional[int] = 60
+    name:           Optional[str] = Field(default="API Key", min_length=1, max_length=128)
+    rate_limit_rpm: Optional[int] = Field(
+        default=60,
+        ge=1,
+        le=10000,
+        description="Rate limit in requests per minute (minimum 1, maximum 10,000)",
+    )
 
 
 class ApiKeyResponse(BaseModel):
@@ -232,6 +239,7 @@ class TaskStatusResponse(BaseModel):
     total_chunks:   int
     error_message:  Optional[str] = None
     created_at:     str
+    updated_at:     Optional[str] = None
     completed_at:   Optional[str] = None
 
 
@@ -269,6 +277,51 @@ def upload_document(
     _validate_collection_name(raw_coll)
 
     scoped_coll = tenant.get_scoped_collection_name(raw_coll)
+
+    # Runtime collision check:
+    # 1. Intra-tenant collision: verify this physical collection is not already mapped to a different logical collection for this tenant
+    existing_other_colls = (
+        db.query(DocumentRecord.collection_name)
+        .filter(
+            DocumentRecord.tenant_id == tenant.tenant_id,
+            DocumentRecord.collection_name != raw_coll,
+        )
+        .distinct()
+        .all()
+    )
+    for (other_coll,) in existing_other_colls:
+        if tenant.get_scoped_collection_name(other_coll) == scoped_coll:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Collection name collision: '{raw_coll}' resolves to the same physical collection as existing collection '{other_coll}'.",
+            )
+
+    # 2. Cross-tenant collision guard: check if physical collection is already owned by or mapped to another tenant
+    chroma_client = get_chroma_client()
+    existing_chroma_colls = {c.name: c for c in chroma_client.list_collections()}
+    if scoped_coll in existing_chroma_colls:
+        coll_meta = existing_chroma_colls[scoped_coll].metadata or {}
+        owner_tenant = coll_meta.get("tenant_id")
+        if owner_tenant and owner_tenant != tenant.tenant_id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cross-tenant collection collision: physical collection for '{raw_coll}' is already owned by another tenant.",
+            )
+
+    other_tenant_has_docs = (
+        db.query(DocumentRecord)
+        .filter(
+            DocumentRecord.tenant_id != tenant.tenant_id,
+            DocumentRecord.collection_name == raw_coll,
+        )
+        .first()
+    )
+    if other_tenant_has_docs and scoped_coll in existing_chroma_colls:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cross-tenant collection collision: physical collection for '{raw_coll}' is already owned by another tenant.",
+        )
+
     safe_name = secure_filename(file.filename or "unnamed.pdf")
     if not safe_name:
         raise HTTPException(status_code=400, detail="Invalid filename.")
@@ -321,6 +374,7 @@ def upload_document(
                 source_name=original_name,
                 doc_title=doc_title,
                 category=category,
+                tenant_id=tenant.tenant_id,
             )
             doc_record = DocumentRecord(
                 tenant_id=tenant.tenant_id,
@@ -411,18 +465,28 @@ def get_task_status(
             detail=f"Ingestion task '{task_id}' not found.",
         )
 
-    # Staleness check: If stuck in pending/processing for > 5 minutes (300s), mark stale
-    if task.status in ("pending", "processing"):
-        created_utc = task.created_at
-        if created_utc.tzinfo is None:
-            created_utc = created_utc.replace(tzinfo=timezone.utc)
-        elapsed_seconds = (datetime.now(timezone.utc) - created_utc).total_seconds()
-
-        if elapsed_seconds > 300.0:  # 5 minutes timeout
-            logger.warning("Task '%s' exceeded 300s timeout ceiling; marking as stale", task_id)
+    # Heartbeat lease staleness check:
+    # 1. Pending tasks: stale if never picked up by worker after 300s (5 min)
+    # 2. Processing tasks: stale only if worker heartbeat has ceased for > 600s (10 min)
+    now_utc = datetime.now(timezone.utc)
+    if task.status == "pending":
+        created_utc = task.created_at if task.created_at.tzinfo else task.created_at.replace(tzinfo=timezone.utc)
+        if (now_utc - created_utc).total_seconds() > 300.0:
+            logger.warning("Task '%s' pending for > 300s without worker pickup; marking as stale", task_id)
+            task.status = "stale"
+            task.error_message = "Task timed out waiting for worker pickup."
+            task.completed_at = get_utc_now()
+            task.updated_at = get_utc_now()
+            db.commit()
+    elif task.status == "processing":
+        ref_time = task.updated_at or task.created_at
+        ref_utc = ref_time if ref_time.tzinfo else ref_time.replace(tzinfo=timezone.utc)
+        if (now_utc - ref_utc).total_seconds() > 600.0:
+            logger.warning("Task '%s' processing heartbeat ceased for > 600s; marking as stale", task_id)
             task.status = "stale"
             task.error_message = "Task timed out or was interrupted by a server restart."
             task.completed_at = get_utc_now()
+            task.updated_at = get_utc_now()
             db.commit()
 
     return TaskStatusResponse(
@@ -433,6 +497,7 @@ def get_task_status(
         total_chunks=task.total_chunks,
         error_message=task.error_message,
         created_at=str(task.created_at),
+        updated_at=str(task.updated_at) if task.updated_at else None,
         completed_at=str(task.completed_at) if task.completed_at else None,
     )
 
@@ -452,17 +517,24 @@ def list_tasks(
         .all()
     )
 
-    # Apply staleness check to returned tasks
+    # Apply lease-based staleness check to returned tasks
     now_utc = datetime.now(timezone.utc)
     for task in tasks:
-        if task.status in ("pending", "processing"):
-            created_utc = task.created_at
-            if created_utc.tzinfo is None:
-                created_utc = created_utc.replace(tzinfo=timezone.utc)
+        if task.status == "pending":
+            created_utc = task.created_at if task.created_at.tzinfo else task.created_at.replace(tzinfo=timezone.utc)
             if (now_utc - created_utc).total_seconds() > 300.0:
+                task.status = "stale"
+                task.error_message = "Task timed out waiting for worker pickup."
+                task.completed_at = get_utc_now()
+                task.updated_at = get_utc_now()
+        elif task.status == "processing":
+            ref_time = task.updated_at or task.created_at
+            ref_utc = ref_time if ref_time.tzinfo else ref_time.replace(tzinfo=timezone.utc)
+            if (now_utc - ref_utc).total_seconds() > 600.0:
                 task.status = "stale"
                 task.error_message = "Task timed out or was interrupted by a server restart."
                 task.completed_at = get_utc_now()
+                task.updated_at = get_utc_now()
     db.commit()
 
     return [
@@ -474,10 +546,60 @@ def list_tasks(
             "total_chunks": t.total_chunks,
             "error_message": t.error_message,
             "created_at": str(t.created_at),
+            "updated_at": str(t.updated_at) if t.updated_at else None,
             "completed_at": str(t.completed_at) if t.completed_at else None,
         }
         for t in tasks
     ]
+
+
+def _compute_candidate_confidence(cand: dict[str, Any], rerank_enabled: bool) -> float:
+    """
+    Compute normalized relevance confidence in [0.0, 1.0] for a retrieved candidate:
+    - If reranker is active, uses cross-encoder sigmoid score (higher is better).
+    - If reranker is disabled:
+      - Uses true semantic cosine similarity (1.0 - dense_score) from Chroma vector search.
+      - Incorporates multi-channel corroboration when BM25 keyword search also matched,
+        provided baseline semantic relevance is non-trivial (dense_sim >= 0.25).
+      - Superficial single-token BM25 matches on semantically irrelevant candidates
+        (dense_sim < 0.25) cannot unilaterally bypass the fallback threshold.
+      - Standalone BM25 matches without dense corroboration are scaled conservatively
+        by keyword density (bm25_score / 10.0) rather than assigned a static high score.
+      - Falls back to normalized synthetic distance similarity if raw channel metrics are absent.
+    """
+    if rerank_enabled and cand.get("rerank_score") is not None:
+        return float(cand["rerank_score"])
+
+    dense_dist = cand.get("dense_score")
+    channels = cand.get("retrieval_channels", [])
+    bm25_score = cand.get("bm25_score")
+
+    if dense_dist is not None:
+        dense_sim = max(0.0, min(1.0, 1.0 - float(dense_dist)))
+        if "bm25" in channels and bm25_score is not None and bm25_score > 0:
+            if dense_sim >= 0.25:
+                # Award multi-channel corroboration bonus scaled by keyword strength
+                bonus = min(0.20, max(0.05, float(bm25_score) / 20.0))
+                return min(1.0, dense_sim + bonus)
+            # Semantically irrelevant candidates with incidental lexical overlap
+            # must not bypass the fallback threshold (0.35)
+            return min(0.28, dense_sim + 0.05)
+        return dense_sim
+
+    if "bm25" in channels and bm25_score is not None and bm25_score > 0:
+        # Standalone sparse match without dense corroboration:
+        # Vector search did not return this candidate in its top pool (negligible semantic alignment).
+        # Without semantic vector corroboration, an isolated BM25 keyword hit cannot guarantee
+        # that the chunk answers the query. To prevent corpus-dependent raw BM25 score spikes
+        # from suppressing web fallback on semantically unsupported queries, uncorroborated BM25
+        # confidence is capped conservatively below the fallback threshold (0.35).
+        return min(0.30, float(bm25_score) / 20.0)
+
+    raw_score = cand.get("score")
+    if raw_score is not None:
+        return max(0.0, min(1.0, 1.0 - (float(raw_score) / 2.0)))
+
+    return 0.0
 
 
 @app.post("/query", response_model=QueryResponse, summary="Query tenant collections with hybrid retrieval, reranking, and web fallback")
@@ -513,6 +635,7 @@ def query_document(
     try:
         rerank_flag = request.enable_rerank if request.enable_rerank is not None else ENABLE_RERANKER
         web_fallback_flag = request.enable_web_fallback if request.enable_web_fallback is not None else ENABLE_WEB_SEARCH
+        effective_web_provider = (request.web_provider or WEB_SEARCH_PROVIDER).strip().lower()
 
         # 0. Check Redis Query Cache
         cached_result = get_cached_response(
@@ -521,6 +644,8 @@ def query_document(
             collection_names=target_collections,
             filters=request.filters,
             enable_rerank=rerank_flag,
+            enable_web_fallback=web_fallback_flag,
+            web_provider=effective_web_provider,
         )
         if cached_result:
             latency_ms = (time.perf_counter() - t_start) * 1000.0
@@ -545,25 +670,66 @@ def query_document(
             )
 
         # 1. Resolve scoped internal collection names for the tenant
-        # Strict isolation: tenants only access their own prefixed collections,
-        # while default_tenant_id can also query root demo collections.
+        # Strict isolation: tenants only access their own collections.
+        # Collections owned by another tenant (checked via ChromaDB metadata or relational documents)
+        # cannot be accessed even if an engineered or colliding namespace is targeted.
         chroma_client = get_chroma_client()
-        existing_colls = {c.name for c in chroma_client.list_collections()}
+        existing_colls = {c.name: c for c in chroma_client.list_collections()}
+
+        def is_collection_accessible_to_tenant(phys_coll: str, logical_name: str) -> bool:
+            if phys_coll not in existing_colls:
+                return False
+            coll_meta = existing_colls[phys_coll].metadata or {}
+            owner_tenant = coll_meta.get("tenant_id")
+            if owner_tenant:
+                return owner_tenant == tenant.tenant_id
+            # Fail closed: check for foreign tenant documents first.
+            # If another tenant has documents under this logical collection name, access must be
+            # denied immediately to prevent cross-tenant chunk leakage from shared collections lacking metadata.
+            has_other_docs = (
+                db.query(DocumentRecord)
+                .filter(
+                    DocumentRecord.tenant_id != tenant.tenant_id,
+                    DocumentRecord.collection_name == logical_name,
+                )
+                .first()
+                is not None
+            )
+            if has_other_docs:
+                return False
+            has_own_docs = (
+                db.query(DocumentRecord)
+                .filter(
+                    DocumentRecord.tenant_id == tenant.tenant_id,
+                    DocumentRecord.collection_name == logical_name,
+                )
+                .first()
+                is not None
+            )
+            if has_own_docs:
+                return True
+            if tenant.is_legacy_tenant:
+                return phys_coll.startswith(f"t_{tenant.tenant_id[:12]}_")
+            return phys_coll.startswith(f"t_{tenant.normalized_tid}_")
 
         scoped_collections = []
         for coll_target in target_collections:
             scoped_c = tenant.get_scoped_collection_name(coll_target)
-            if scoped_c in existing_colls:
+            legacy_c = tenant.get_legacy_scoped_collection_name(coll_target)
+            pre_mig_c = tenant.get_pre_migration_scoped_collection_name(coll_target)
+            if is_collection_accessible_to_tenant(scoped_c, coll_target):
                 scoped_collections.append(scoped_c)
+            elif legacy_c and is_collection_accessible_to_tenant(legacy_c, coll_target):
+                scoped_collections.append(legacy_c)
+            elif pre_mig_c and is_collection_accessible_to_tenant(pre_mig_c, coll_target):
+                scoped_collections.append(pre_mig_c)
             elif (
-                tenant.tenant_id == "default_tenant_id"
+                tenant.tenant_id in ("default_tenant_id", "default_tena")
                 and coll_target in existing_colls
                 and not coll_target.startswith("t_")
                 and not coll_target.startswith("tenant_")
             ):
                 scoped_collections.append(coll_target)
-            else:
-                scoped_collections.append(scoped_c)
 
         # 2. Local Retrieval across tenant-scoped collections
         local_context = retrieve_context(
@@ -574,8 +740,14 @@ def query_document(
         )
 
         # 3. Evaluate fallback trigger
-        best_local_score = max((c.get("rerank_score", 1.0) for c in local_context), default=0.0)
-        trigger_fallback = web_fallback_flag and (len(local_context) == 0 or best_local_score < WEB_SEARCH_FALLBACK_THRESHOLD)
+        best_local_confidence = max(
+            (_compute_candidate_confidence(c, rerank_flag) for c in local_context),
+            default=0.0,
+        )
+        low_relevance = best_local_confidence < WEB_SEARCH_FALLBACK_THRESHOLD
+        score_summary = f"best local confidence: {best_local_confidence:.4f} < threshold {WEB_SEARCH_FALLBACK_THRESHOLD:.4f}"
+
+        trigger_fallback = web_fallback_flag and (len(local_context) == 0 or low_relevance)
 
         final_context = local_context
         retrieval_mode = "local_document"
@@ -583,16 +755,15 @@ def query_document(
 
         if trigger_fallback:
             logger.info(
-                "Web fallback triggered for tenant '%s' query '%s' (local chunks: %d, score: %.4f < threshold %.4f)",
+                "Web fallback triggered for tenant '%s' query '%s' (local chunks: %d, %s)",
                 tenant.tenant_name,
                 request.question,
                 len(local_context),
-                best_local_score,
-                WEB_SEARCH_FALLBACK_THRESHOLD,
+                score_summary if len(local_context) > 0 else "no local chunks retrieved",
             )
             web_results = search_web(
                 query=request.question,
-                provider=request.web_provider or WEB_SEARCH_PROVIDER,
+                provider=effective_web_provider,
             )
             if web_results:
                 fallback_triggered = True
@@ -636,11 +807,29 @@ def query_document(
         db.commit()
 
         # Clean collection names on response (strip tenant_id prefix)
-        prefix_to_strip = f"t_{tenant.tenant_id[:12]}_"
+        full_prefix = f"t_{tenant.normalized_tid}_"
+        legacy_prefix = f"t_{tenant.tenant_id[:12]}_"
+        scoped_to_target = {}
+        for coll_target in target_collections:
+            scoped_to_target[tenant.get_scoped_collection_name(coll_target)] = coll_target
+            leg = tenant.get_legacy_scoped_collection_name(coll_target)
+            if leg:
+                scoped_to_target[leg] = coll_target
+            pre = tenant.get_pre_migration_scoped_collection_name(coll_target)
+            if pre:
+                scoped_to_target[pre] = coll_target
+
         formatted_sources = []
         for ctx_item in final_context:
             raw_c_name = ctx_item.get("collection_name")
-            display_coll = raw_c_name.replace(prefix_to_strip, "") if raw_c_name else None
+            display_coll = raw_c_name
+            if raw_c_name:
+                if raw_c_name in scoped_to_target:
+                    display_coll = scoped_to_target[raw_c_name]
+                elif raw_c_name.startswith(full_prefix):
+                    display_coll = raw_c_name[len(full_prefix):]
+                elif tenant.is_legacy_tenant and raw_c_name.startswith(legacy_prefix):
+                    display_coll = raw_c_name[len(legacy_prefix):]
             formatted_sources.append(
                 SourceReference(
                     page=ctx_item.get("page", 1),
@@ -675,6 +864,8 @@ def query_document(
             response_data=cache_payload,
             filters=request.filters,
             enable_rerank=rerank_flag,
+            enable_web_fallback=web_fallback_flag,
+            web_provider=effective_web_provider,
         )
 
         return QueryResponse(
@@ -691,25 +882,81 @@ def query_document(
 
 
 @app.get("/collections", summary="List collections owned by the authenticated tenant")
-def list_collections(tenant: TenantContext = Depends(check_rate_limit)) -> dict[str, Any]:
+def list_collections(
+    tenant: TenantContext = Depends(check_rate_limit),
+    db:     Session       = Depends(get_db),
+) -> dict[str, Any]:
     """Return list of collections belonging strictly to the current tenant."""
     try:
         client = get_chroma_client()
-        tenant_prefix = f"t_{tenant.tenant_id[:12]}_"
-        all_colls = [c.name for c in client.list_collections()]
+        full_prefix = f"t_{tenant.normalized_tid}_"
+        legacy_prefix = f"t_{tenant.tenant_id[:12]}_"
+        all_chroma_colls = client.list_collections()
+        all_colls = [
+            c.name for c in all_chroma_colls
+            if not ((c.metadata or {}).get("tenant_id") and (c.metadata or {}).get("tenant_id") != tenant.tenant_id)
+        ]
 
-        tenant_colls = []
+        # Relational records store original logical client names (including names 29-45 chars)
+        db_docs = (
+            db.query(DocumentRecord.collection_name)
+            .filter(DocumentRecord.tenant_id == tenant.tenant_id)
+            .distinct()
+            .all()
+        )
+        known_logical_names = {r[0] for r in db_docs if r[0]}
+
+        pre_mig_prefix = None
+        if len(tenant.tenant_id) > 32:
+            old_tid = (
+                tenant.tenant_id
+                if len(tenant.tenant_id) <= 36
+                else f"{tenant.tenant_id[:24]}{hashlib.sha256(tenant.tenant_id.encode('utf-8')).hexdigest()[:8]}"
+            )
+            pre_mig_prefix = f"t_{old_tid}_"
+
+        tenant_colls: set[str] = set()
+
+        for l_name in known_logical_names:
+            scoped_c = tenant.get_scoped_collection_name(l_name)
+            legacy_c = tenant.get_legacy_scoped_collection_name(l_name)
+            pre_mig_c = tenant.get_pre_migration_scoped_collection_name(l_name)
+            if (
+                scoped_c in all_colls
+                or (legacy_c and legacy_c in all_colls)
+                or (pre_mig_c and pre_mig_c in all_colls)
+            ):
+                tenant_colls.add(l_name)
+
         for c in all_colls:
-            if c.startswith(tenant_prefix):
-                tenant_colls.append(c[len(tenant_prefix):])
+            if c.startswith(full_prefix):
+                tail = c[len(full_prefix):]
+                # If this tail doesn't correspond to a known long name, add directly (skipping internal dotted hashes)
+                if not any(tenant.get_scoped_collection_name(l) == c for l in known_logical_names):
+                    if "." not in tail:
+                        tenant_colls.add(tail)
             elif (
-                tenant.tenant_id == "default_tenant_id"
+                tenant.is_legacy_tenant
+                and c.startswith(legacy_prefix)
+            ):
+                tail = c[len(legacy_prefix):]
+                tenant_colls.add(tail)
+            elif (
+                pre_mig_prefix
+                and c.startswith(pre_mig_prefix)
+            ):
+                tail = c[len(pre_mig_prefix):]
+                if not any(tenant.get_pre_migration_scoped_collection_name(l) == c for l in known_logical_names):
+                    if "." not in tail:
+                        tenant_colls.add(tail)
+            elif (
+                tenant.tenant_id in ("default_tenant_id", "default_tena")
                 and not c.startswith("t_")
                 and not c.startswith("tenant_")
             ):
-                tenant_colls.append(c)
+                tenant_colls.add(c)
 
-        return {"collections": tenant_colls, "tenant": tenant.tenant_name}
+        return {"collections": sorted(list(tenant_colls)), "tenant": tenant.tenant_name}
     except Exception as e:
         logger.exception("Failed to list collections for tenant '%s': %s", tenant.tenant_name, e)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again or contact support.") from e
@@ -724,26 +971,138 @@ def delete_collection(
     """Delete the collection belonging to the authenticated tenant."""
     _validate_collection_name(collection_name)
     scoped_coll = tenant.get_scoped_collection_name(collection_name)
-
+    legacy_coll = tenant.get_legacy_scoped_collection_name(collection_name)
+    pre_mig_coll = tenant.get_pre_migration_scoped_collection_name(collection_name)
     try:
         client = get_chroma_client()
-        try:
-            client.delete_collection(scoped_coll)
-            delete_bm25_index(scoped_coll)
+        existing_colls = {c.name: c for c in client.list_collections()}
+        target_coll = None
+        if scoped_coll in existing_colls:
+            target_coll = scoped_coll
+        elif legacy_coll and legacy_coll in existing_colls:
+            target_coll = legacy_coll
+        elif pre_mig_coll and pre_mig_coll in existing_colls:
+            target_coll = pre_mig_coll
 
-            # Clean records in Postgres/SQLite
-            db.query(DocumentRecord).filter(
+        # Check if any BM25 index file (.json or legacy .pkl) exists on disk
+        bm25_candidates = [scoped_coll]
+        if legacy_coll:
+            bm25_candidates.append(legacy_coll)
+        if pre_mig_coll:
+            bm25_candidates.append(pre_mig_coll)
+
+        existing_bm25_colls = [
+            c for c in bm25_candidates
+            if any(
+                os.path.exists(os.path.join(CHROMA_PATH, f"{c}_bm25{ext}"))
+                for ext in (".json", ".pkl")
+            )
+        ]
+        bm25_exists = len(existing_bm25_colls) > 0
+
+        doc_count = (
+            db.query(DocumentRecord)
+            .filter(
                 DocumentRecord.tenant_id == tenant.tenant_id,
                 DocumentRecord.collection_name == collection_name,
-            ).delete()
-            db.commit()
+            )
+            .count()
+        )
 
-            invalidate_tenant_cache(tenant.tenant_id)
+        # Cross-tenant ownership verification:
+        # If target_coll exists, verify it belongs to calling tenant, not another tenant
+        if target_coll:
+            coll_meta = existing_colls[target_coll].metadata or {}
+            owner_tenant = coll_meta.get("tenant_id")
+            if owner_tenant and owner_tenant != tenant.tenant_id:
+                # Target collection belongs to a different tenant!
+                raise CollectionNotFoundError(collection_name)
+            if doc_count == 0:
+                # Calling tenant has no documents; check if another tenant owns documents here
+                other_tenant_has_docs = (
+                    db.query(DocumentRecord)
+                    .filter(
+                        DocumentRecord.tenant_id != tenant.tenant_id,
+                        DocumentRecord.collection_name == collection_name,
+                    )
+                    .first()
+                    is not None
+                )
+                if other_tenant_has_docs:
+                    raise CollectionNotFoundError(collection_name)
 
-            logger.info("Deleted scoped collection '%s' for tenant '%s'", scoped_coll, tenant.tenant_name)
-            return {"message": f"Collection '{collection_name}' deleted."}
-        except ValueError:
+        # Orphaned BM25 file verification (when target_coll does not exist):
+        # Prevent cross-tenant sidecar deletion and unverified deletion
+        if not target_coll and bm25_exists:
+            for c in existing_bm25_colls:
+                file_tid = get_bm25_file_tenant_id(c)
+                # If persistent sidecar indicates an explicit foreign owner, reject
+                if file_tid and file_tid != tenant.tenant_id:
+                    raise CollectionNotFoundError(collection_name)
+                # If calling tenant has no relational documents and sidecar does not verify ownership, reject
+                if doc_count == 0 and file_tid != tenant.tenant_id:
+                    raise CollectionNotFoundError(collection_name)
+
+            if doc_count == 0:
+                other_tenant_has_docs = (
+                    db.query(DocumentRecord)
+                    .filter(
+                        DocumentRecord.tenant_id != tenant.tenant_id,
+                        DocumentRecord.collection_name == collection_name,
+                    )
+                    .first()
+                    is not None
+                )
+                if other_tenant_has_docs:
+                    raise CollectionNotFoundError(collection_name)
+
+        if not target_coll and not bm25_exists and doc_count == 0:
             raise CollectionNotFoundError(collection_name)
+
+        if target_coll:
+            try:
+                client.delete_collection(target_coll)
+            except ValueError as ve:
+                err_text = str(ve).lower()
+                # ChromaDB raises ValueError("Collection <name> does not exist.") when collection is absent.
+                # Only treat as already removed if specifically matching this condition; propagate any other ValueError.
+                if "does not exist" in err_text:
+                    logger.info("ChromaDB collection '%s' already removed: %s", target_coll, ve)
+                else:
+                    logger.exception("ChromaDB delete_collection raised unexpected ValueError for '%s': %s", target_coll, ve)
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to delete underlying vector collection '{collection_name}': {ve}. Relational records were preserved.",
+                    ) from ve
+            except Exception as e:
+                logger.exception("Failed to delete physical vector collection '%s': %s", target_coll, e)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to delete underlying vector collection '{collection_name}'. Relational records were preserved.",
+                ) from e
+
+        # Delete BM25 sparse index on disk (must propagate failure to prevent retaining plain chunks)
+        try:
+            for c in bm25_candidates:
+                delete_bm25_index(c)
+        except Exception as e:
+            logger.exception("Failed to delete BM25 index file for collection '%s': %s", collection_name, e)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Incomplete collection deletion: failed to remove persistent BM25 index for '{collection_name}'. Relational records were preserved.",
+            ) from e
+
+        # Clean records in Postgres/SQLite only after physical deletion succeeds
+        db.query(DocumentRecord).filter(
+            DocumentRecord.tenant_id == tenant.tenant_id,
+            DocumentRecord.collection_name == collection_name,
+        ).delete()
+        db.commit()
+
+        invalidate_tenant_cache(tenant.tenant_id)
+
+        logger.info("Deleted collection '%s' (internal: '%s') for tenant '%s'", collection_name, target_coll, tenant.tenant_name)
+        return {"message": f"Collection '{collection_name}' deleted."}
     except CollectionNotFoundError:
         raise
     except HTTPException:
@@ -761,16 +1120,141 @@ def reset_tenant_collections(
     """Wipe all collections belonging strictly to the calling tenant."""
     try:
         client = get_chroma_client()
-        tenant_prefix = f"t_{tenant.tenant_id[:12]}_"
-        for coll in client.list_collections():
-            if coll.name.startswith(tenant_prefix):
-                try:
-                    client.delete_collection(coll.name)
-                    delete_bm25_index(coll.name)
-                except Exception:
-                    logger.warning("Could not delete collection '%s'", coll.name, exc_info=True)
+        full_prefix = f"t_{tenant.normalized_tid}_"
+        legacy_prefix = f"t_{tenant.tenant_id[:12]}_"
+        pre_mig_prefix = None
+        if len(tenant.tenant_id) > 32:
+            old_tid = (
+                tenant.tenant_id
+                if len(tenant.tenant_id) <= 36
+                else f"{tenant.tenant_id[:24]}{hashlib.sha256(tenant.tenant_id.encode('utf-8')).hexdigest()[:8]}"
+            )
+            pre_mig_prefix = f"t_{old_tid}_"
 
-        db.query(DocumentRecord).filter(DocumentRecord.tenant_id == tenant.tenant_id).delete()
+        # 1. Identify all logical collections owned by this tenant from DB records
+        db_logical_records = (
+            db.query(DocumentRecord.collection_name)
+            .filter(DocumentRecord.tenant_id == tenant.tenant_id)
+            .distinct()
+            .all()
+        )
+        tenant_logical_names = {r[0] for r in db_logical_records if r[0]}
+
+        # Map physical collection names to corresponding tenant logical names
+        phys_to_logicals: dict[str, set[str]] = {}
+        for l_name in tenant_logical_names:
+            for cand in [
+                tenant.get_scoped_collection_name(l_name),
+                tenant.get_legacy_scoped_collection_name(l_name),
+                tenant.get_pre_migration_scoped_collection_name(l_name),
+            ]:
+                if cand:
+                    phys_to_logicals.setdefault(cand, set()).add(l_name)
+
+        # 2. Identify physical collections in ChromaDB belonging to this tenant
+        all_colls = client.list_collections()
+        target_colls: list[Any] = []
+        for coll in all_colls:
+            coll_meta = coll.metadata or {}
+            owner_tenant = coll_meta.get("tenant_id")
+            if owner_tenant:
+                if owner_tenant == tenant.tenant_id:
+                    target_colls.append(coll)
+                continue
+
+            # If coll_meta lacks tenant_id, verify prefix and check relational ownership
+            matches_prefix = coll.name.startswith(full_prefix) or (
+                tenant.is_legacy_tenant and coll.name.startswith(legacy_prefix)
+            ) or (
+                pre_mig_prefix and coll.name.startswith(pre_mig_prefix)
+            )
+            if not matches_prefix:
+                continue
+
+            # Fail-closed check: if another tenant has documents mapping to this physical collection or logical name, skip
+            candidate_logicals = phys_to_logicals.get(coll.name, set())
+            has_other_docs = False
+            for l_name in candidate_logicals:
+                if (
+                    db.query(DocumentRecord)
+                    .filter(
+                        DocumentRecord.tenant_id != tenant.tenant_id,
+                        DocumentRecord.collection_name == l_name,
+                    )
+                    .first()
+                    is not None
+                ):
+                    has_other_docs = True
+                    break
+            if has_other_docs:
+                continue
+
+            target_colls.append(coll)
+
+        failed_physical: list[str] = []
+        failed_logicals: set[str] = set()
+
+        # 3. Delete physical ChromaDB collections and their BM25 indexes
+        for coll in target_colls:
+            p_name = coll.name
+            try:
+                client.delete_collection(p_name)
+            except ValueError as ve:
+                if "does not exist" in str(ve).lower():
+                    pass
+                else:
+                    logger.exception("ChromaDB delete_collection error for '%s': %s", p_name, ve)
+                    failed_physical.append(p_name)
+                    for l in phys_to_logicals.get(p_name, []):
+                        failed_logicals.add(l)
+            except Exception as e:
+                logger.exception("Failed to delete ChromaDB collection '%s': %s", p_name, e)
+                failed_physical.append(p_name)
+                for l in phys_to_logicals.get(p_name, []):
+                    failed_logicals.add(l)
+
+            try:
+                delete_bm25_index(p_name)
+            except Exception as e:
+                logger.exception("Failed to delete BM25 index for collection '%s': %s", p_name, e)
+                failed_physical.append(f"{p_name}_bm25")
+                for l in phys_to_logicals.get(p_name, []):
+                    failed_logicals.add(l)
+
+        # 4. Clean up any remaining BM25 indexes for known tenant logical collections
+        for l_name in tenant_logical_names:
+            if l_name in failed_logicals:
+                continue
+            for cand in [
+                tenant.get_scoped_collection_name(l_name),
+                tenant.get_legacy_scoped_collection_name(l_name),
+                tenant.get_pre_migration_scoped_collection_name(l_name),
+            ]:
+                if cand:
+                    try:
+                        delete_bm25_index(cand)
+                    except Exception as e:
+                        logger.exception("Failed to delete BM25 index '%s' for logical '%s': %s", cand, l_name, e)
+                        failed_physical.append(f"{cand}_bm25")
+                        failed_logicals.add(l_name)
+
+        # 5. Handle failures and relational DocumentRecord cleanup
+        if failed_logicals or failed_physical:
+            if failed_logicals:
+                # Atomically preserve records for failed collections while cleaning succeeded collections
+                db.query(DocumentRecord).filter(
+                    DocumentRecord.tenant_id == tenant.tenant_id,
+                    DocumentRecord.collection_name.not_in(list(failed_logicals)),
+                ).delete(synchronize_session=False)
+                db.commit()
+            invalidate_tenant_cache(tenant.tenant_id)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Incomplete reset: failed to delete physical collections: {', '.join(failed_physical)}. Relational records were preserved for failed collections.",
+            )
+
+        # Succeeded completely: delete all relational records for tenant
+        db.query(DocumentRecord).filter(DocumentRecord.tenant_id == tenant.tenant_id).delete(synchronize_session=False)
         db.commit()
 
         invalidate_tenant_cache(tenant.tenant_id)
@@ -778,6 +1262,8 @@ def reset_tenant_collections(
         logger.info("All collections deleted for tenant '%s'", tenant.tenant_name)
         return {"message": f"All collections for tenant '{tenant.tenant_name}' deleted."}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Reset failed for tenant '%s': %s", tenant.tenant_name, e)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again or contact support.") from e
@@ -790,13 +1276,20 @@ def create_api_key(
     db:     Session       = Depends(get_db),
 ) -> ApiKeyResponse:
     """Generate a new high-entropy 256-bit API key for the calling tenant."""
+    rpm = req.rate_limit_rpm if req.rate_limit_rpm is not None else 60
+    if rpm < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid rate_limit_rpm. Must be at least 1 request per minute.",
+        )
+
     raw_key, key_hash, key_prefix = generate_api_key()
     new_key_record = ApiKey(
         tenant_id=tenant.tenant_id,
         key_hash=key_hash,
         key_prefix=key_prefix,
         name=req.name or "API Key",
-        rate_limit_rpm=req.rate_limit_rpm or 60,
+        rate_limit_rpm=rpm,
         is_active=True,
     )
     db.add(new_key_record)
